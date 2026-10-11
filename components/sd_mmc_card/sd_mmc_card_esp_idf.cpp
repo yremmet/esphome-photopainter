@@ -14,7 +14,7 @@ int constexpr SD_OCR_SDHC_CAP = (1 << 30);  // value defined in esp-idf/componen
 namespace esphome {
 namespace sd_mmc_card {
 
-static constexpr size_t FILE_PATH_MAX = ESP_VFS_PATH_MAX + CONFIG_SPIFFS_OBJ_NAME_LEN;
+static constexpr size_t FILE_PATH_MAX = ESP_VFS_PATH_MAX + 256;
 static const char *TAG = "sd_mmc_card";
 static const std::string MOUNT_POINT("/sdcard");
 

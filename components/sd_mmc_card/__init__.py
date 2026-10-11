@@ -81,8 +81,7 @@ CONFIG_SCHEMA = cv.All(
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
-
-    if include_builtin_idf_component is not None and CORE.using_esp_idf:
+    if include_builtin_idf_component is not None and CORE.is_esp32:
         for comp in ("fatfs", "sdmmc", "esp_driver_sdmmc", "wear_levelling"):
             include_builtin_idf_component(comp)
         require_fatfs()

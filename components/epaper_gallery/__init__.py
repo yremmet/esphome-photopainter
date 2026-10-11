@@ -46,7 +46,7 @@ async def to_code(config):
     cg.add(var.set_scale_mode(config[CONF_SCALE]))
     cg.add(var.set_dither(config[CONF_DITHER]))
     cg.add(var.set_auto_rotate(config[CONF_AUTO_ROTATE]))
-    if require_vfs_dir is not None and CORE.using_esp_idf:
-        require_vfs_dir()  # opendir/readdir on the SD card
+    if require_vfs_dir is not None and CORE.is_esp32:
+      require_vfs_dir()  # opendir/readdir on the SD card
     # Same JPEG decoder ESPHome itself uses for online_image / runtime_image
     cg.add_library("JPEGDEC", None, "https://github.com/bitbank2/JPEGDEC#1.8.2")
