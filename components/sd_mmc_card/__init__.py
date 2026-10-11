@@ -12,6 +12,14 @@ from esphome.const import (
 )
 from esphome.core import CORE
 from esphome.components.esp32 import get_esp32_variant
+try:  # ESPHome >= 2026: built-in IDF components are excluded unless requested
+    from esphome.components.esp32 import (
+        include_builtin_idf_component,
+        require_fatfs,
+        require_vfs_dir,
+    )
+except ImportError:  # older ESPHome builds everything anyway
+    include_builtin_idf_component = require_fatfs = require_vfs_dir = None
 from esphome.components.esp32.const import (
     VARIANT_ESP32,
     VARIANT_ESP32S3,
@@ -73,6 +81,12 @@ CONFIG_SCHEMA = cv.All(
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
+
+    if include_builtin_idf_component is not None and CORE.using_esp_idf:
+        for comp in ("fatfs", "sdmmc", "esp_driver_sdmmc", "wear_levelling"):
+            include_builtin_idf_component(comp)
+        require_fatfs()
+        require_vfs_dir()
 
     cg.add(var.set_mode_1bit(config[CONF_MODE_1BIT]))
     cg.add(var.set_format_if_mount_failed(config[CONF_FORMAT_IF_MOUNT_FAILED]))

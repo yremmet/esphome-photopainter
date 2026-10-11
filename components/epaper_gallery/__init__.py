@@ -2,6 +2,12 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import display
 from esphome.const import CONF_ID
+from esphome.core import CORE
+
+try:
+    from esphome.components.esp32 import require_vfs_dir
+except ImportError:
+    require_vfs_dir = None
 
 DEPENDENCIES = ["display"]
 
@@ -40,5 +46,7 @@ async def to_code(config):
     cg.add(var.set_scale_mode(config[CONF_SCALE]))
     cg.add(var.set_dither(config[CONF_DITHER]))
     cg.add(var.set_auto_rotate(config[CONF_AUTO_ROTATE]))
+    if require_vfs_dir is not None and CORE.using_esp_idf:
+        require_vfs_dir()  # opendir/readdir on the SD card
     # Same JPEG decoder ESPHome itself uses for online_image / runtime_image
     cg.add_library("JPEGDEC", None, "https://github.com/bitbank2/JPEGDEC#1.8.2")
