@@ -56,3 +56,10 @@ Lambda API: `show("file.jpg")`, `show_next()`, `show_previous()`,
 ## License
 
 MIT
+
+## Vendored components
+
+`components/sd_mmc_card` and `components/sd_file_server` are copied from
+[n-serrette/esphome_sd_card](https://github.com/n-serrette/esphome_sd_card)
+(see `LICENSE.upstream`) and patched for the ESPHome ≥ 2026 `web_server_idf`
+API (`url_to()` / removed `network::get_use_address()`).

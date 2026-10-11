@@ -317,7 +317,7 @@ bool EPaperGallery::decode_bmp_(uint8_t *d, size_t n) {
   this->src_h_ = h;
   this->src_ = (uint8_t *) psram_alloc((size_t) w * h * 3);
   if (this->src_ == nullptr) {
-    ESP_LOGE(TAG, "Out of memory for %dx%d source", w, h);
+    ESP_LOGE(TAG, "Out of memory for %ldx%ld source", (long) w, (long) h);
     return false;
   }
   for (int y = 0; y < h; y++) {
