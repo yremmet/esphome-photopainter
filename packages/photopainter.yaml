@@ -62,7 +62,7 @@ psram:
 external_components:
   - source:
       type: git
-      url: https://github.com/<you>/esphome-photopainter
+      url: https://github.com/yremmet/esphome-photopainter
       ref: main
     components: [epaper_gallery]
     refresh: 1h
@@ -142,15 +142,16 @@ display:
     auto_clear_enabled: false   # the gallery fills the buffer itself; no lambda here
 
 # ---------------------------------------------------------------- SD card
-# TODO: SD pins! Take them from the Waveshare repo
-#   waveshareteam/ESP32-S3-PhotoPainter -> 05_ArduinoExample (SD_MMC.setPins(...))
-#   or the schematic on the wiki. The values below are placeholders.
+# SDIO 4-bit, pins per Lissors/tintenklecks config.h (same board)
 sd_mmc_card:
   id: sd_card
-  mode_1bit: true
-  clk_pin: GPIO39   # TODO verify
-  cmd_pin: GPIO38   # TODO verify
-  data0_pin: GPIO40 # TODO verify
+  mode_1bit: false
+  clk_pin: GPIO39
+  cmd_pin: GPIO41
+  data0_pin: GPIO40
+  data1_pin: GPIO1
+  data2_pin: GPIO2
+  data3_pin: GPIO38
 
 sd_file_server:
   id: file_server

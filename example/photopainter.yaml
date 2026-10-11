@@ -5,7 +5,7 @@ substitutions:
 
 packages:
   photopainter:
-    url: https://github.com/<you>/esphome-photopainter
+    url: https://github.com/yremmet/esphome-photopainter
     ref: main
     files: [packages/photopainter.yaml]
     refresh: 1h

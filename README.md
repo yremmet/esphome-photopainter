@@ -24,8 +24,7 @@ example/photopainter.yaml    minimal per-device YAML using the package
 
 1. Copy `example/photopainter.yaml` and `example/secrets.yaml.example` (as `secrets.yaml`)
    into your ESPHome config directory and fill in the secrets.
-2. **Verify the SD card pins** in `packages/photopainter.yaml` against the
-   Waveshare Arduino example (`SD_MMC.setPins`) – they are placeholders.
+2. SD card: FAT32, create a folder `images/` on it.
 3. Flash, then upload images to `http://photopainter.local/file/images/`.
 4. Press *Refresh image list*, pick an image in the *Image* select.
 
