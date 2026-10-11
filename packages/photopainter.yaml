@@ -1,0 +1,221 @@
+# Waveshare ESP32-S3-PhotoPainter – ESPHome
+# BLE proxy + SD-card picture library with on-device dithering
+#
+# Workflow:
+#   1. Upload JPG/BMP to http://photopainter.local/file/images  (sd_file_server)
+#   2. Press "Refresh image list"  (or it refreshes on boot)
+#   3. Pick a file in the "Image" select (HA or ESPHome web UI) -> rendered + dithered on device
+
+esphome:
+  name: ${name}
+  friendly_name: ${friendly_name}
+  platformio_options:
+    board_build.flash_mode: qio
+  on_boot:
+    # --- AXP2101 PMIC: EPD_VCC hangs on ALDO3, must be 3.3 V and enabled
+    #     before the first display refresh. Sequence from the Waveshare OEM
+    #     firmware (axp_cmd_init), see esphome discussion #3790.
+    - priority: 600
+      then:
+        - lambda: |-
+            auto rd = [](uint8_t reg, uint8_t &v) { return id(pmic_i2c).write_readv(0x34, &reg, 1, &v, 1); };
+            auto wr = [](uint8_t reg, uint8_t v) { uint8_t d[2] = {reg, v}; return id(pmic_i2c).write(0x34, d, 2); };
+            uint8_t dcdc1 = 0, aldo3 = 0, aldo4 = 0, ldo_en = 0;
+            if (rd(0x82, dcdc1) != i2c::ERROR_OK || rd(0x94, aldo3) != i2c::ERROR_OK ||
+                rd(0x95, aldo4) != i2c::ERROR_OK || rd(0x90, ldo_en) != i2c::ERROR_OK) {
+              ESP_LOGE("axp2101", "PMIC not reachable - EPD power not configured");
+              return;
+            }
+            dcdc1 = 0x12;                       // 1500 mV + 18*100 mV = 3.3 V
+            aldo3 = (aldo3 & 0xE0) | 0x1C;      //  500 mV + 28*100 mV = 3.3 V
+            aldo4 = (aldo4 & 0xE0) | 0x1C;
+            if (wr(0x82, dcdc1) != i2c::ERROR_OK || wr(0x94, aldo3) != i2c::ERROR_OK ||
+                wr(0x95, aldo4) != i2c::ERROR_OK || wr(0x90, ldo_en | 0x04) != i2c::ERROR_OK) {
+              ESP_LOGE("axp2101", "Failed to apply 3.3 V rail setup");
+              return;
+            }
+            ESP_LOGI("axp2101", "EPD rails configured (DCDC1/ALDO3/ALDO4 = 3.3 V)");
+    # --- wire the gallery to the select entity once everything is up
+    - priority: -200
+      then:
+        - lambda: |-
+            id(gallery).add_on_list_changed_callback([]() {
+              auto files = id(gallery).get_files();
+              if (files.empty()) files.push_back("(no images)");
+              id(image_select).traits.set_options(files);
+            });
+            id(gallery).add_on_image_shown_callback([](std::string f) {
+              id(image_select).publish_state(f);
+            });
+            id(gallery).refresh_list();
+
+esp32:
+  variant: esp32s3
+  flash_size: 16MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/<you>/esphome-photopainter
+      ref: main
+    components: [epaper_gallery]
+    refresh: 1h
+  - source: github://n-serrette/esphome_sd_card
+    components: [sd_mmc_card, sd_file_server]
+
+logger:
+  level: INFO
+  logs:
+    epaper_gallery: DEBUG
+
+api:
+  encryption:
+    key: !secret api_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  power_save_mode: none        # BLE proxy wants a responsive radio
+  ap:
+    ssid: ${friendly_name} Fallback
+    password: !secret fallback_psk
+
+captive_portal:
+
+web_server:
+  port: 80
+  version: 3
+
+# ---------------------------------------------------------------- BLE proxy
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+
+bluetooth_proxy:
+  active: true
+
+# ---------------------------------------------------------------- buses
+i2c:
+  - id: pmic_i2c
+    sda: GPIO47
+    scl: GPIO48
+    frequency: 100kHz
+    scan: false
+
+spi:
+  - id: spi_epd
+    clk_pin: GPIO10
+    mosi_pin: GPIO11
+    interface: spi3
+
+# ---------------------------------------------------------------- display
+display:
+  - platform: epaper_spi
+    id: epd
+    spi_id: spi_epd
+    model: 7.3in-spectra-e6
+    cs_pin: GPIO9
+    dc_pin: GPIO8
+    reset_pin: GPIO12
+    reset_duration: 20ms
+    busy_pin:
+      number: GPIO13
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    data_rate: 10MHz
+    dimensions:
+      width: 800
+      height: 480
+    update_interval: never
+    auto_clear_enabled: false   # the gallery fills the buffer itself; no lambda here
+
+# ---------------------------------------------------------------- SD card
+# TODO: SD pins! Take them from the Waveshare repo
+#   waveshareteam/ESP32-S3-PhotoPainter -> 05_ArduinoExample (SD_MMC.setPins(...))
+#   or the schematic on the wiki. The values below are placeholders.
+sd_mmc_card:
+  id: sd_card
+  mode_1bit: true
+  clk_pin: GPIO39   # TODO verify
+  cmd_pin: GPIO38   # TODO verify
+  data0_pin: GPIO40 # TODO verify
+
+sd_file_server:
+  id: file_server
+  url_prefix: file
+  root_path: "/"
+  enable_deletion: true
+  enable_download: true
+  enable_upload: true
+
+# ---------------------------------------------------------------- gallery
+epaper_gallery:
+  id: gallery
+  display_id: epd
+  root_path: /sdcard/images   # mount point of sd_mmc_card + sub folder
+  scale: fit                  # fit = white borders, fill = centered crop
+  dither: true
+  auto_rotate: true
+
+select:
+  - platform: template
+    id: image_select
+    name: Image
+    icon: mdi:image
+    optimistic: true
+    options: ["(no images)"]
+    set_action:
+      - lambda: |-
+          if (x != "(no images)") id(gallery).show(x);
+
+button:
+  - platform: template
+    name: Refresh image list
+    icon: mdi:refresh
+    on_press:
+      - lambda: id(gallery).refresh_list();
+  - platform: template
+    name: Next image
+    icon: mdi:skip-next
+    on_press:
+      - lambda: id(gallery).show_next();
+  - platform: template
+    name: Previous image
+    icon: mdi:skip-previous
+    on_press:
+      - lambda: id(gallery).show_previous();
+
+# Optional slideshow: uncomment and the frame cycles every 6 h
+# interval:
+#   - interval: 6h
+#     then:
+#       - lambda: id(gallery).show_next();
+
+# ---------------------------------------------------------------- onboard sensors (bonus)
+sensor:
+  - platform: shtcx
+    i2c_id: pmic_i2c
+    temperature:
+      name: Temperature
+    humidity:
+      name: Humidity
+    update_interval: 5min
+  - platform: wifi_signal
+    name: WiFi signal
+    update_interval: 60s
+
+time:
+  - platform: pcf85063
+    i2c_id: pmic_i2c

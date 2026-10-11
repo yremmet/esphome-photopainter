@@ -1,0 +1,11 @@
+# Minimal device config – drop this into your ESPHome config dir next to secrets.yaml
+substitutions:
+  name: photopainter
+  friendly_name: PhotoPainter
+
+packages:
+  photopainter:
+    url: https://github.com/<you>/esphome-photopainter
+    ref: main
+    files: [packages/photopainter.yaml]
+    refresh: 1h
