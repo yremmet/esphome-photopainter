@@ -2,6 +2,9 @@
 
 #include <JPEGDEC.h>
 #include <esp_heap_caps.h>
+#include <esp_task_wdt.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #include <dirent.h>
 #include <algorithm>
@@ -40,6 +43,21 @@ static const int16_t MATCH_PALETTE[6][3] = {
     {50, 140, 70},    // green
 };
 
+static constexpr int RENDER_TASK_CORE = 1;
+static constexpr uint32_t RENDER_TASK_STACK = 12 * 1024;
+
+// Feed the task watchdog only if the calling task is subscribed to it
+// (the main loop is, our render task is not).
+static inline void feed_wdt_safe() {
+  if (esp_task_wdt_status(nullptr) == ESP_OK)
+    feed_wdt_safe();
+}
+
+static void render_task_entry(void *arg) {
+  static_cast<EPaperGallery *>(arg)->render_task_body_();
+  vTaskDelete(nullptr);
+}
+
 static void *psram_alloc(size_t n) {
   void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (p == nullptr)
@@ -69,18 +87,43 @@ void EPaperGallery::dump_config() {
 }
 
 void EPaperGallery::loop() {
-  if (this->pending_.empty())
+  // 1) a finished render -> push to the display from the main loop (SPI lives here)
+  if (this->task_done_.load()) {
+    this->task_done_.store(false);
+    this->task_running_.store(false);
+    if (this->task_ok_) {
+      this->blit_and_update_();
+      this->image_shown_cb_.call(this->task_file_);
+    }
+    this->free_buffers_();
+  }
+
+  // 2) start the next render if one is pending and nothing is running
+  if (this->pending_.empty() || this->task_running_.load())
     return;
-  std::string file = this->pending_;
+
+  this->task_file_ = this->pending_;
   this->pending_.clear();
 
-  auto it = std::find(this->files_.begin(), this->files_.end(), file);
+  auto it = std::find(this->files_.begin(), this->files_.end(), this->task_file_);
   if (it != this->files_.end())
     this->current_index_ = it - this->files_.begin();
 
-  if (this->render_(this->root_path_ + "/" + file)) {
-    this->image_shown_cb_.call(file);
+  this->dst_w_ = this->display_->get_width();
+  this->dst_h_ = this->display_->get_height();
+  this->task_ok_ = false;
+  this->task_running_.store(true);
+  BaseType_t ok = xTaskCreatePinnedToCore(render_task_entry, "epaper_render", RENDER_TASK_STACK, this,
+                                          tskIDLE_PRIORITY + 1, nullptr, RENDER_TASK_CORE);
+  if (ok != pdPASS) {
+    ESP_LOGE(TAG, "Could not create render task");
+    this->task_running_.store(false);
   }
+}
+
+void EPaperGallery::render_task_body_() {
+  this->task_ok_ = this->render_(this->root_path_ + "/" + this->task_file_);
+  this->task_done_.store(true);
 }
 
 // ---------------------------------------------------------------- library
@@ -150,6 +193,10 @@ void EPaperGallery::free_buffers_() {
     free(this->dst_);
     this->dst_ = nullptr;
   }
+  if (this->idx_ != nullptr) {
+    free(this->idx_);
+    this->idx_ = nullptr;
+  }
 }
 
 bool EPaperGallery::render_(const std::string &path) {
@@ -182,7 +229,7 @@ bool EPaperGallery::render_(const std::string &path) {
     ESP_LOGE(TAG, "Short read (%u/%ld)", (unsigned) rd, size);
     return false;
   }
-  App.feed_wdt();
+  feed_wdt_safe();
 
   bool ok = false;
   if (data[0] == 'B' && data[1] == 'M') {
@@ -199,25 +246,40 @@ bool EPaperGallery::render_(const std::string &path) {
   }
   const uint32_t t1 = millis();
   ESP_LOGI(TAG, "Decoded %dx%d in %u ms", this->src_w_, this->src_h_, (unsigned) (t1 - t0));
-  App.feed_wdt();
+  feed_wdt_safe();
 
   this->resample_();
   free(this->src_);
   this->src_ = nullptr;
   const uint32_t t2 = millis();
   ESP_LOGI(TAG, "Resampled to %dx%d in %u ms", this->dst_w_, this->dst_h_, (unsigned) (t2 - t1));
-  App.feed_wdt();
+  feed_wdt_safe();
 
-  this->dither_and_draw_();
+  this->dither_();
   free(this->dst_);
   this->dst_ = nullptr;
   const uint32_t t3 = millis();
-  ESP_LOGI(TAG, "Dithered + drawn in %u ms, triggering display update", (unsigned) (t3 - t2));
+  ESP_LOGI(TAG, "Dithered in %u ms (core %d), handing over to main loop", (unsigned) (t3 - t2), xPortGetCoreID());
+  return this->idx_ != nullptr;
+}
 
+// Runs in the main loop: copy palette indices into the display buffer and refresh.
+void EPaperGallery::blit_and_update_() {
+  const uint32_t t0 = millis();
+  const int w = this->dst_w_, h = this->dst_h_;
+  for (int y = 0; y < h; y++) {
+    const uint8_t *row = this->idx_ + (size_t) y * w;
+    for (int x = 0; x < w; x++) {
+      const uint8_t *p = PALETTE[row[x]];
+      this->display_->draw_pixel_at(x, y, Color(p[0], p[1], p[2]));
+    }
+    if ((y & 31) == 0)
+      feed_wdt_safe();
+  }
+  ESP_LOGI(TAG, "Blitted in %u ms, triggering display update", (unsigned) (millis() - t0));
   // display must have auto_clear_enabled: false and no lambda, otherwise the
   // buffer we just filled would be wiped here.
   this->display_->update();
-  return true;
 }
 
 // ---------------------------------------------------------------- JPEG
@@ -230,7 +292,7 @@ static int jpeg_draw_cb(JPEGDRAW *d) {
 
 void EPaperGallery::jpeg_block(void *draw) {
   auto *d = static_cast<JPEGDRAW *>(draw);
-  App.feed_wdt();
+  feed_wdt_safe();
   const uint16_t *px = d->pPixels;  // RGB565 little endian
   for (int y = 0; y < d->iHeight; y++) {
     int dy = d->y + y;
@@ -260,8 +322,8 @@ bool EPaperGallery::decode_jpeg_(uint8_t *data, size_t size) {
   }
   const int w = jpeg->getWidth();
   const int h = jpeg->getHeight();
-  const int tw = this->display_->get_width();
-  const int th = this->display_->get_height();
+  const int tw = this->dst_w_;
+  const int th = this->dst_h_;
 
   // Let the decoder downscale by 2/4/8 while the result still covers the
   // display in both dimensions (saves a lot of RAM and time on phone photos).
@@ -336,7 +398,7 @@ bool EPaperGallery::decode_bmp_(uint8_t *d, size_t n) {
       o += 3;
     }
     if ((y & 31) == 0)
-      App.feed_wdt();
+      feed_wdt_safe();
   }
   return true;
 }
@@ -344,10 +406,8 @@ bool EPaperGallery::decode_bmp_(uint8_t *d, size_t n) {
 // ---------------------------------------------------------------- resample
 
 void EPaperGallery::resample_() {
-  const int tw = this->display_->get_width();
-  const int th = this->display_->get_height();
-  this->dst_w_ = tw;
-  this->dst_h_ = th;
+  const int tw = this->dst_w_;
+  const int th = this->dst_h_;
   this->dst_ = (uint8_t *) psram_alloc((size_t) tw * th * 3);
   memset(this->dst_, 0xFF, (size_t) tw * th * 3);  // white background
 
@@ -400,15 +460,20 @@ void EPaperGallery::resample_() {
       }
     }
     if ((y & 15) == 0)
-      App.feed_wdt();
+      feed_wdt_safe();
   }
 }
 
 // ---------------------------------------------------------------- dither
 
-void EPaperGallery::dither_and_draw_() {
+void EPaperGallery::dither_() {
   const int w = this->dst_w_;
   const int h = this->dst_h_;
+  this->idx_ = (uint8_t *) psram_alloc((size_t) w * h);
+  if (this->idx_ == nullptr) {
+    ESP_LOGE(TAG, "Out of memory for index buffer");
+    return;
+  }
 
   // error buffers for the current and next row, index (x+1) to allow x-1/x+1 without bounds checks
   std::vector<int16_t> err_cur((w + 2) * 3, 0);
@@ -443,7 +508,7 @@ void EPaperGallery::dither_and_draw_() {
         }
       }
 
-      this->display_->draw_pixel_at(x, y, Color(PALETTE[best][0], PALETTE[best][1], PALETTE[best][2]));
+      this->idx_[(size_t) y * w + x] = (uint8_t) best;
 
       if (!this->dither_)
         continue;
@@ -460,7 +525,7 @@ void EPaperGallery::dither_and_draw_() {
     std::swap(err_cur, err_next);
     std::fill(err_next.begin(), err_next.end(), 0);
     if ((y & 15) == 0)
-      App.feed_wdt();
+      feed_wdt_safe();
   }
 }
 

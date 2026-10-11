@@ -46,6 +46,12 @@ void SDFileServer::handleRequest(AsyncWebServerRequest *request) {
       this->handle_delete(request);
       return;
     }
+    // ESPHome's IDF web server only dispatches GET/POST/OPTIONS, so the page
+    // sends deletes as POST with a form body "action=delete".
+    if (request->method() == HTTP_POST && request->arg("action") == "delete") {
+      this->handle_delete(request);
+      return;
+    }
   }
 }
 
@@ -303,7 +309,9 @@ void SDFileServer::handle_index(AsyncWebServerRequest *request, std::string cons
 
   response->print("</tbody></table>"
                     "<script>"
-                    "function delete_file(path) {fetch(path, {method: \"DELETE\"});}"
+                    "function delete_file(path) {fetch(path, {method: \"POST\", headers: {\"Content-Type\": "
+                    "\"application/x-www-form-urlencoded\"}, body: \"action=delete\"})"
+                    ".then(() => location.reload());}"
                     "function download_file(path, filename) {"
                     "fetch(path).then(response => response.blob())"
                     ".then(blob => {"
@@ -469,4 +477,4 @@ std::string Path::mime_type(std::string const &file) {
 }
 
 }  // namespace sd_file_server
-}  // namespace esphome
+}  // namespace esphomed100

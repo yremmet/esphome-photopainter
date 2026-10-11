@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <string>
 #include <vector>
 
@@ -17,8 +18,10 @@ enum ScaleMode { SCALE_FIT, SCALE_FILL };
  * display, Floyd–Steinberg-dithers them to the 6-colour Spectra E6 palette and
  * pushes the result to the display buffer.
  *
- * Everything runs in the main loop and blocks for a few seconds per image;
- * the watchdog is fed regularly. An e-paper refresh takes ~25 s anyway.
+ * Decoding, scaling and dithering run in a FreeRTOS task pinned to core 1 so
+ * the ESPHome main loop (BLE proxy, API, web server) stays responsive. The
+ * result is a palette-index buffer that the main loop copies into the display
+ * and flushes with update().
  */
 class EPaperGallery : public Component {
  public:
@@ -42,6 +45,7 @@ class EPaperGallery : public Component {
   bool show(const std::string &filename);
   bool show_next();
   bool show_previous();
+  bool is_busy() const { return this->task_running_.load(); }
 
   void add_on_list_changed_callback(std::function<void()> &&cb) { this->list_changed_cb_.add(std::move(cb)); }
   void add_on_image_shown_callback(std::function<void(std::string)> &&cb) {
@@ -50,13 +54,16 @@ class EPaperGallery : public Component {
 
   /// Internal: JPEGDEC draw callback target (void* to avoid leaking JPEGDEC.h into the header)
   void jpeg_block(void *draw);
+  /// Internal: body of the render task
+  void render_task_body_();
 
  protected:
   bool render_(const std::string &path);
   bool decode_jpeg_(uint8_t *data, size_t size);
   bool decode_bmp_(uint8_t *data, size_t size);
   void resample_();
-  void dither_and_draw_();
+  void dither_();
+  void blit_and_update_();
   void free_buffers_();
 
   display::Display *display_{nullptr};
@@ -69,12 +76,20 @@ class EPaperGallery : public Component {
   int current_index_{-1};
   std::string pending_;
 
+  // render task state
+  std::string task_file_;
+  std::atomic<bool> task_running_{false};
+  std::atomic<bool> task_done_{false};
+  bool task_ok_{false};
+
   // decoded source image, RGB888
   uint8_t *src_{nullptr};
   int src_w_{0}, src_h_{0};
   // display-sized working image, RGB888
   uint8_t *dst_{nullptr};
   int dst_w_{0}, dst_h_{0};
+  // display-sized palette index buffer (one byte per pixel), produced by the task
+  uint8_t *idx_{nullptr};
 
   CallbackManager<void()> list_changed_cb_;
   CallbackManager<void(std::string)> image_shown_cb_;
