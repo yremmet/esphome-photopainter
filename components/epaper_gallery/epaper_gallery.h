@@ -14,7 +14,7 @@ namespace epaper_gallery {
 
 enum ScaleMode { SCALE_FIT, SCALE_FILL };
 enum ColorSpace { CS_RGB, CS_LAB };
-enum DitherMethod { DITHER_NONE, DITHER_FLOYD_STEINBERG, DITHER_ATKINSON, DITHER_JJN };
+enum DitherMethod { DITHER_NONE, DITHER_FLOYD_STEINBERG, DITHER_ATKINSON, DITHER_JJN, DITHER_DIZZY };
 
 /**
  * Loads JPEG/BMP files from a mounted filesystem (SD card), scales them to the
@@ -89,6 +89,7 @@ class EPaperGallery : public Component {
   bool decode_bmp_(uint8_t *data, size_t size);
   void resample_();
   void quantize_();
+  void quantize_dizzy_(const uint8_t tone[3][256], int strength);
   void prepare_palette_();
   int nearest_(const int v[3]) const;
   void present_(uint8_t *idx, int w, int h);

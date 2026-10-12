@@ -36,7 +36,7 @@ epaper_gallery:
   root_path: /sdcard/images   # folder on the SD card
   scale: fit                  # fit | fill
   auto_rotate: true           # rotate portrait photos 90° to fill the landscape panel
-  dither: floyd_steinberg     # none | floyd_steinberg | atkinson | jarvis_judice_ninke
+  dither: floyd_steinberg     # none | floyd_steinberg | atkinson | jarvis_judice_ninke | dizzy
   error_clamp: 64             # 0..255, 255 = off
   dither_strength: 100%
   page_id: photo_page         # optional, see below

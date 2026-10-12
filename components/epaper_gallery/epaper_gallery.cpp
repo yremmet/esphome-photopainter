@@ -199,7 +199,7 @@ void EPaperGallery::dump_config() {
   ESP_LOGCONFIG(TAG, "E-Paper Gallery:");
   ESP_LOGCONFIG(TAG, "  Root path: %s", this->root_path_.c_str());
   ESP_LOGCONFIG(TAG, "  Scale: %s", this->scale_mode_ == SCALE_FILL ? "fill" : "fit");
-  static const char *const DITHER_NAMES[] = {"none", "floyd_steinberg", "atkinson", "jarvis_judice_ninke"};
+  static const char *const DITHER_NAMES[] = {"none", "floyd_steinberg", "atkinson", "jarvis_judice_ninke", "dizzy"};
   ESP_LOGCONFIG(TAG, "  Dither: %s (strength %.0f%%, error clamp %d)", DITHER_NAMES[this->dither_method_],
                 this->dither_strength_ * 100.0f, this->error_clamp_);
   ESP_LOGCONFIG(TAG, "  Tone compression: %.0f%%", this->tone_compression_ * 100.0f);
@@ -656,6 +656,11 @@ void EPaperGallery::quantize_() {
     }
   }
 
+  if (this->dither_method_ == DITHER_DIZZY) {
+    this->quantize_dizzy_(tone, strength);
+    return;
+  }
+
   // three error rows (current + 2 ahead), 2 px padding each side so x±2 needs no bounds checks
   const int stride = (w + 4) * 3;
   std::vector<int16_t> err(stride * 3, 0);
@@ -699,6 +704,71 @@ void EPaperGallery::quantize_() {
     if ((y & 15) == 0)
       feed_wdt_safe();
   }
+}
+
+// Dizzy dithering (liamappelbe): visit pixels in random order and spread the error
+// evenly over the 4-neighbours not visited yet. No scan direction, so no worms or
+// diagonal streaks. Works in place on dst_ (values clamped to 0..255 like the
+// original); idx_ = 0xFF marks "not done yet". Error clamp is not used here.
+void EPaperGallery::quantize_dizzy_(const uint8_t tone[3][256], int strength) {
+  const int w = this->dst_w_, h = this->dst_h_;
+  const uint32_t n = (uint32_t) w * h;
+  auto *order = (uint32_t *) psram_alloc((size_t) n * sizeof(uint32_t));
+  if (order == nullptr) {
+    ESP_LOGE(TAG, "Out of memory for dizzy dither order");
+    free(this->idx_);
+    this->idx_ = nullptr;
+    return;
+  }
+  // Fisher-Yates with a fixed-seed xorshift: same image + settings -> same result
+  uint32_t rng = 0x9E3779B9u;
+  for (uint32_t i = 0; i < n; i++)
+    order[i] = i;
+  for (uint32_t i = n - 1; i > 0; i--) {
+    rng ^= rng << 13;
+    rng ^= rng >> 17;
+    rng ^= rng << 5;
+    const uint32_t j = rng % (i + 1);
+    std::swap(order[i], order[j]);
+  }
+
+  for (uint32_t i = 0; i < n * 3; i++)
+    this->dst_[i] = tone[i % 3][this->dst_[i]];
+  memset(this->idx_, 0xFF, n);
+
+  static const int8_t NB[4][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};
+  for (uint32_t k = 0; k < n; k++) {
+    const uint32_t pos = order[k];
+    const int x = pos % w, y = pos / w;
+    uint8_t *p = this->dst_ + (size_t) pos * 3;
+    const int v[3] = {p[0], p[1], p[2]};
+    const int best = this->nearest_(v);
+    this->idx_[pos] = (uint8_t) best;
+
+    uint32_t nbs[4];
+    int cnt = 0;
+    for (const auto &d : NB) {
+      const int nx = x + d[0], ny = y + d[1];
+      if (nx >= 0 && ny >= 0 && nx < w && ny < h) {
+        const uint32_t np = (uint32_t) ny * w + nx;
+        if (this->idx_[np] == 0xFF)
+          nbs[cnt++] = np;
+      }
+    }
+    if (cnt > 0) {
+      for (int c = 0; c < 3; c++) {
+        const int share = (((v[c] - this->match_rgb_[best][c]) * strength) >> 8) / cnt;
+        for (int i = 0; i < cnt; i++) {
+          uint8_t &q = this->dst_[(size_t) nbs[i] * 3 + c];
+          const int t = q + share;
+          q = (uint8_t) (t < 0 ? 0 : (t > 255 ? 255 : t));
+        }
+      }
+    }
+    if ((k & 4095) == 0)
+      feed_wdt_safe();
+  }
+  free(order);
 }
 
 }  // namespace epaper_gallery

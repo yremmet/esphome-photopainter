@@ -42,6 +42,7 @@ DITHER_METHODS = {
     "floyd_steinberg": DitherMethod.DITHER_FLOYD_STEINBERG,
     "atkinson": DitherMethod.DITHER_ATKINSON,  # only diffuses 3/4 of the error: more contrast, less noise
     "jarvis_judice_ninke": DitherMethod.DITHER_JJN,  # wider kernel: smoother, less wormy
+    "dizzy": DitherMethod.DITHER_DIZZY,  # random pixel order: no directional artefacts, grainier
 }
 
 
