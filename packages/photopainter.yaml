@@ -198,6 +198,22 @@ script:
 
 select:
   - platform: template
+    id: tone_curve_select
+    name: Tone curve
+    icon: mdi:chart-bell-curve-cumulative
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 46
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    # order must match epaper_gallery::ToneCurve
+    options: [linear, soft]
+    initial_option: linear
+    on_value:
+      - lambda: id(gallery).set_tone_curve((epaper_gallery::ToneCurve) i);
+      - script.execute: rerender
+  - platform: template
     id: image_select
     name: Image
     web_server:
@@ -242,6 +258,24 @@ select:
       - script.execute: rerender
 
 number:
+  - platform: template
+    id: saturation_number
+    name: Saturation
+    icon: mdi:palette-outline
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 45
+    entity_category: config
+    unit_of_measurement: "%"
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 200
+    step: 5
+    initial_value: 130
+    on_value:
+      - lambda: id(gallery).set_saturation(x / 100.0f);
+      - script.execute: rerender
   - platform: template
     id: tone_compression_number
     name: Tone compression

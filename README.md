@@ -39,6 +39,9 @@ epaper_gallery:
   dither: floyd_steinberg     # none | floyd_steinberg | atkinson | jarvis_judice_ninke | dizzy
   error_clamp: 64             # 0..255, 255 = off
   dither_strength: 100%
+  tone_compression: 100%      # squeeze 0..255 into the panel's black..white range
+  tone_curve: linear          # linear | soft (soft keeps midtone contrast)
+  saturation: 1.3             # boost before dithering, 1.0 = unchanged
   page_id: photo_page         # optional, see below
 ```
 
@@ -64,6 +67,7 @@ Lambda API: `show("file.jpg")`, `show_next()`, `show_previous()`,
 `refresh_list()`, `get_files()`, `get_current()`, `draw(it)`,
 `show_calibration_pattern()`, `set_palette_preset("aitjcize")`,
 `set_dither_method(...)`, `set_error_clamp(n)`, `set_dither_strength(f)`,
+`set_tone_compression(f)`, `set_tone_curve(...)`, `set_saturation(f)`,
 `add_on_list_changed_callback(cb)`, `add_on_image_shown_callback(cb)`.
 
 ## Notes

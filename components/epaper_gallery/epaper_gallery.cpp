@@ -202,7 +202,8 @@ void EPaperGallery::dump_config() {
   static const char *const DITHER_NAMES[] = {"none", "floyd_steinberg", "atkinson", "jarvis_judice_ninke", "dizzy"};
   ESP_LOGCONFIG(TAG, "  Dither: %s (strength %.0f%%, error clamp %d)", DITHER_NAMES[this->dither_method_],
                 this->dither_strength_ * 100.0f, this->error_clamp_);
-  ESP_LOGCONFIG(TAG, "  Tone compression: %.0f%%", this->tone_compression_ * 100.0f);
+  ESP_LOGCONFIG(TAG, "  Saturation: %.0f%%, tone compression: %.0f%% (%s)", this->saturation_ * 100.0f,
+                this->tone_compression_ * 100.0f, this->tone_curve_ == TONE_SOFT ? "soft" : "linear");
   ESP_LOGCONFIG(TAG, "  Auto-rotate: %s", YESNO(this->auto_rotate_));
   ESP_LOGCONFIG(TAG, "  Colour space: %s", this->color_space_ == CS_LAB ? "lab" : "rgb");
   for (int i = 0; i < 6; i++)
@@ -601,6 +602,50 @@ void EPaperGallery::resample_() {
   }
 }
 
+// ---------------------------------------------------------------- pre-processing
+
+// Map input 0..255 onto the panel's black..white (lo..hi) range.
+//  linear: everything is scaled -> highlights keep texture, but midtones go flat.
+//  soft:   midtones stay 1:1, only the ends are squeezed (knee at a quarter of
+//          the panel range from each end), so the image keeps its contrast.
+static float tone_map(int i, float lo, float hi, ToneCurve curve) {
+  if (curve == TONE_LINEAR || hi - lo < 8.0f)
+    return lo + i * (hi - lo) / 255.0f;
+  const float knee = (hi - lo) * 0.25f;
+  const float a = lo + knee, b = hi - knee;  // identity between a and b
+  if (i < a)
+    return lo + i * (a - lo) / a;
+  if (i > b)
+    return b + (i - b) * (hi - b) / (255.0f - b);
+  return i;
+}
+
+// In place on dst_, before dithering: saturation boost, then tone curve.
+void EPaperGallery::preprocess_() {
+  uint8_t tone[3][256];
+  const float k = this->tone_compression_;
+  for (int c = 0; c < 3; c++) {
+    const float lo = this->match_rgb_[0][c], hi = this->match_rgb_[1][c];
+    for (int i = 0; i < 256; i++) {
+      const float t = i + (tone_map(i, lo, hi, this->tone_curve_) - i) * k;
+      tone[c][i] = (uint8_t) (t < 0 ? 0 : (t > 255 ? 255 : t + 0.5f));
+    }
+  }
+  // The panel only has a few pure inks: low-saturation photos would otherwise
+  // dither to black/white only and look sepia-grey. Push colours away from grey.
+  const int sat = (int) (this->saturation_ * 256.0f);
+  const size_t n = (size_t) this->dst_w_ * this->dst_h_;
+  for (size_t i = 0; i < n; i++) {
+    uint8_t *p = this->dst_ + i * 3;
+    const int y = (p[0] * 77 + p[1] * 150 + p[2] * 29) >> 8;
+    for (int c = 0; c < 3; c++) {
+      int v = y + (((p[c] - y) * sat) >> 8);
+      v = v < 0 ? 0 : (v > 255 ? 255 : v);
+      p[c] = tone[c][v];
+    }
+  }
+}
+
 // ---------------------------------------------------------------- dither
 
 // Error diffusion kernels: (dx, dy, weight), weights sum to <= div.
@@ -642,22 +687,10 @@ void EPaperGallery::quantize_() {
   const int clamp = this->error_clamp_;
   const int strength = (int) (this->dither_strength_ * 256.0f);  // 8.8 fixed point
 
-  // Tone compression: squeeze the photo's 0..255 into the panel's black..white range
-  // (palette entries 0/1), so highlights brighter than panel white (a white dress)
-  // and the deepest shadows keep their texture instead of clipping solid.
-  uint8_t tone[3][256];
-  const float tone_k = this->tone_compression_;
-  for (int c = 0; c < 3; c++) {
-    const float lo = this->match_rgb_[0][c], hi = this->match_rgb_[1][c];
-    for (int i = 0; i < 256; i++) {
-      const float mapped = lo + i * (hi - lo) / 255.0f;
-      const float t = i + (mapped - i) * tone_k;
-      tone[c][i] = (uint8_t) (t < 0 ? 0 : (t > 255 ? 255 : t + 0.5f));
-    }
-  }
+  this->preprocess_();
 
   if (this->dither_method_ == DITHER_DIZZY) {
-    this->quantize_dizzy_(tone, strength);
+    this->quantize_dizzy_(strength);
     return;
   }
 
@@ -680,7 +713,7 @@ void EPaperGallery::quantize_() {
         // clamp accumulated error: the sparse 6-colour gamut otherwise lets error
         // pile up in flat areas and bleed out as colour streaks
         const int e = ec[c] < -clamp ? -clamp : (ec[c] > clamp ? clamp : ec[c]);
-        const int t = tone[c][p[c]] + e;
+        const int t = p[c] + e;
         v[c] = t < 0 ? 0 : (t > 255 ? 255 : t);
       }
 
@@ -710,7 +743,7 @@ void EPaperGallery::quantize_() {
 // evenly over the 4-neighbours not visited yet. No scan direction, so no worms or
 // diagonal streaks. Works in place on dst_ (values clamped to 0..255 like the
 // original); idx_ = 0xFF marks "not done yet". Error clamp is not used here.
-void EPaperGallery::quantize_dizzy_(const uint8_t tone[3][256], int strength) {
+void EPaperGallery::quantize_dizzy_(int strength) {
   const int w = this->dst_w_, h = this->dst_h_;
   const uint32_t n = (uint32_t) w * h;
   auto *order = (uint32_t *) psram_alloc((size_t) n * sizeof(uint32_t));
@@ -732,8 +765,6 @@ void EPaperGallery::quantize_dizzy_(const uint8_t tone[3][256], int strength) {
     std::swap(order[i], order[j]);
   }
 
-  for (uint32_t i = 0; i < n * 3; i++)
-    this->dst_[i] = tone[i % 3][this->dst_[i]];
   memset(this->idx_, 0xFF, n);
 
   static const int8_t NB[4][2] = {{1, 0}, {0, 1}, {-1, 0}, {0, -1}};

@@ -14,6 +14,7 @@ namespace epaper_gallery {
 
 enum ScaleMode { SCALE_FIT, SCALE_FILL };
 enum ColorSpace { CS_RGB, CS_LAB };
+enum ToneCurve { TONE_LINEAR, TONE_SOFT };
 enum DitherMethod { DITHER_NONE, DITHER_FLOYD_STEINBERG, DITHER_ATKINSON, DITHER_JJN, DITHER_DIZZY };
 
 /**
@@ -40,6 +41,9 @@ class EPaperGallery : public Component {
   void set_dither_strength(float s) { this->dither_strength_ = s; }
   /// Map the photo's 0..255 into the panel's black..white range (0 = off, 1 = full)
   void set_tone_compression(float k) { this->tone_compression_ = k; }
+  void set_tone_curve(ToneCurve c) { this->tone_curve_ = c; }
+  /// Colour saturation applied before dithering (1 = unchanged, 1.3 = +30 %)
+  void set_saturation(float s) { this->saturation_ = s; }
   void set_auto_rotate(bool r) { this->auto_rotate_ = r; }
   void set_color_space(ColorSpace cs) { this->color_space_ = cs; }
   /// Calibrated appearance of palette entry i (0 black, 1 white, 2 yellow, 3 red, 4 blue, 5 green)
@@ -89,7 +93,8 @@ class EPaperGallery : public Component {
   bool decode_bmp_(uint8_t *data, size_t size);
   void resample_();
   void quantize_();
-  void quantize_dizzy_(const uint8_t tone[3][256], int strength);
+  void preprocess_();
+  void quantize_dizzy_(int strength);
   void prepare_palette_();
   int nearest_(const int v[3]) const;
   void present_(uint8_t *idx, int w, int h);
@@ -103,6 +108,8 @@ class EPaperGallery : public Component {
   int error_clamp_{64};
   float dither_strength_{1.0f};
   float tone_compression_{1.0f};
+  ToneCurve tone_curve_{TONE_LINEAR};
+  float saturation_{1.3f};
   bool auto_rotate_{true};
   ColorSpace color_space_{CS_LAB};
   // Colours used for the "which palette entry is closest" decision (order: black white
