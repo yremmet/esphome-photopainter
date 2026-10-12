@@ -7,7 +7,5 @@ packages:
   photopainter:
     url: https://github.com/yremmet/esphome-photopainter
     ref: main
-    files:
-      - packages/photopainter.yaml
-      # - packages/dashboard.yaml   # optional weather/CO2 page, adjust its substitutions
+    files: [packages/photopainter.yaml]
     refresh: 1h

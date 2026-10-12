@@ -45,8 +45,12 @@ class EPaperGallery : public Component {
   /// "measured" (first calibration photo), "aitjcize" (esp32-photoframe), "waveshare" (pure RGB).
   /// Takes effect with the next render. Returns false for an unknown name.
   bool set_palette_preset(const std::string &name);
-  /// Draw the six solid colour patches for calibration (call display update yourself afterwards)
-  void draw_calibration_pattern();
+  /// Page to switch to whenever a new image is ready (optional, for displays with pages)
+  void set_page(display::DisplayPage *page) { this->page_ = page; }
+  /// Show the six solid palette patches (black white yellow / red blue green) and refresh
+  void show_calibration_pattern();
+  /// Draw the current image into a display buffer: `lambda: id(gallery).draw(it);`
+  void draw(display::Display &it);
 
   float get_setup_priority() const override { return setup_priority::LATE; }
   void setup() override;
@@ -82,10 +86,11 @@ class EPaperGallery : public Component {
   void quantize_();
   void prepare_palette_();
   int nearest_(const int v[3]) const;
-  void blit_and_update_();
+  void present_(uint8_t *idx, int w, int h);
   void free_buffers_();
 
   display::Display *display_{nullptr};
+  display::DisplayPage *page_{nullptr};
   std::string root_path_{"/sdcard/images"};
   ScaleMode scale_mode_{SCALE_FIT};
   DitherMethod dither_method_{DITHER_FLOYD_STEINBERG};
@@ -116,6 +121,9 @@ class EPaperGallery : public Component {
   int dst_w_{0}, dst_h_{0};
   // display-sized palette index buffer (one byte per pixel), produced by the task
   uint8_t *idx_{nullptr};
+  // image currently on screen, kept so draw() can repaint it on every display update
+  uint8_t *shown_idx_{nullptr};
+  int shown_w_{0}, shown_h_{0};
 
   CallbackManager<void()> list_changed_cb_;
   CallbackManager<void(std::string)> image_shown_cb_;

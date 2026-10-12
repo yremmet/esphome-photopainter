@@ -35,12 +35,35 @@ epaper_gallery:
   display_id: epd
   root_path: /sdcard/images   # folder on the SD card
   scale: fit                  # fit | fill
-  dither: true
   auto_rotate: true           # rotate portrait photos 90° to fill the landscape panel
+  dither: floyd_steinberg     # none | floyd_steinberg | atkinson | jarvis_judice_ninke
+  error_clamp: 64             # 0..255, 255 = off
+  dither_strength: 100%
+  page_id: photo_page         # optional, see below
+```
+
+The gallery is a drawing source like any other: it keeps the last rendered image
+and paints it from a display lambda or page. A finished image triggers `update()`
+on the display (and switches to `page_id` first, if set).
+
+```yaml
+display:
+  - platform: epaper_spi
+    id: epd
+    # ...
+    pages:
+      - id: photo_page
+        lambda: id(gallery).draw(it);
+      - id: dashboard_page
+        lambda: |-
+          it.fill(Color::WHITE);
+          // your own stuff
 ```
 
 Lambda API: `show("file.jpg")`, `show_next()`, `show_previous()`,
-`refresh_list()`, `get_files()`, `get_current()`,
+`refresh_list()`, `get_files()`, `get_current()`, `draw(it)`,
+`show_calibration_pattern()`, `set_palette_preset("aitjcize")`,
+`set_dither_method(...)`, `set_error_clamp(n)`, `set_dither_strength(f)`,
 `add_on_list_changed_callback(cb)`, `add_on_image_shown_callback(cb)`.
 
 ## Notes

@@ -122,16 +122,20 @@ bool EPaperGallery::set_palette_preset(const std::string &name) {
   return true;
 }
 
-void EPaperGallery::draw_calibration_pattern() {
-  this->display_->show_page(nullptr);  // see blit_and_update_()
+void EPaperGallery::show_calibration_pattern() {
+  // a palette-index image like any decoded photo, so it goes through the same draw() path
   const int w = this->display_->get_width(), h = this->display_->get_height();
-  const int cols = 3, rows = 2;
-  const int pw = w / cols, ph = h / rows;
-  for (int i = 0; i < 6; i++) {
-    const int x = (i % cols) * pw, y = (i / cols) * ph;
-    this->display_->filled_rectangle(x, y, pw, ph, Color(PALETTE[i][0], PALETTE[i][1], PALETTE[i][2]));
+  auto *idx = (uint8_t *) psram_alloc((size_t) w * h);
+  if (idx == nullptr) {
+    ESP_LOGE(TAG, "Out of memory for calibration pattern");
+    return;
   }
-  ESP_LOGI(TAG, "Calibration pattern drawn: black white yellow / red blue green");
+  const int pw = w / 3, ph = h / 2;
+  for (int y = 0; y < h; y++)
+    for (int x = 0; x < w; x++)
+      idx[(size_t) y * w + x] = (uint8_t) (std::min(y / ph, 1) * 3 + std::min(x / pw, 2));
+  ESP_LOGI(TAG, "Calibration pattern: black white yellow / red blue green");
+  this->present_(idx, w, h);
 }
 
 // ---------------------------------------------------------------- colour maths
@@ -217,7 +221,8 @@ void EPaperGallery::loop() {
     this->task_done_.store(false);
     this->task_running_.store(false);
     if (this->task_ok_) {
-      this->blit_and_update_();
+      this->present_(this->idx_, this->dst_w_, this->dst_h_);
+      this->idx_ = nullptr;  // now owned as shown_idx_
       this->image_shown_cb_.call(this->task_file_);
     }
     this->free_buffers_();
@@ -388,25 +393,32 @@ bool EPaperGallery::render_(const std::string &path) {
   return this->idx_ != nullptr;
 }
 
-// Runs in the main loop: copy palette indices into the display buffer and refresh.
-void EPaperGallery::blit_and_update_() {
+// Main loop: take ownership of a finished palette-index image and refresh the display.
+void EPaperGallery::present_(uint8_t *idx, int w, int h) {
+  free(this->shown_idx_);
+  this->shown_idx_ = idx;
+  this->shown_w_ = w;
+  this->shown_h_ = h;
+  if (this->page_ != nullptr)
+    this->page_->show();
+  this->display_->update();  // runs the display lambda / page, which calls draw()
+}
+
+void EPaperGallery::draw(display::Display &it) {
+  if (this->shown_idx_ == nullptr)
+    return;
   const uint32_t t0 = millis();
-  const int w = this->dst_w_, h = this->dst_h_;
+  const int w = std::min(this->shown_w_, it.get_width()), h = std::min(this->shown_h_, it.get_height());
   for (int y = 0; y < h; y++) {
-    const uint8_t *row = this->idx_ + (size_t) y * w;
+    const uint8_t *row = this->shown_idx_ + (size_t) y * this->shown_w_;
     for (int x = 0; x < w; x++) {
       const uint8_t *p = PALETTE[row[x]];
-      this->display_->draw_pixel_at(x, y, Color(p[0], p[1], p[2]));
+      it.draw_pixel_at(x, y, Color(p[0], p[1], p[2]));
     }
     if ((y & 31) == 0)
       feed_wdt_safe();
   }
-  ESP_LOGI(TAG, "Blitted in %u ms, triggering display update", (unsigned) (millis() - t0));
-  // display must have auto_clear_enabled: false and no lambda, otherwise the
-  // buffer we just filled would be wiped here. If the display has pages (e.g. a
-  // dashboard), drop the active page so update() doesn't draw it over the photo.
-  this->display_->show_page(nullptr);
-  this->display_->update();
+  ESP_LOGD(TAG, "Drawn in %u ms", (unsigned) (millis() - t0));
 }
 
 // ---------------------------------------------------------------- JPEG

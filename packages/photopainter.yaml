@@ -148,7 +148,10 @@ display:
       width: 800
       height: 480
     update_interval: never
-    auto_clear_enabled: false   # the gallery fills the buffer itself; no lambda here
+    auto_clear_enabled: false   # photo + dashboard paint the whole screen; clear() would be black
+    # The gallery is an ordinary drawing source. Want more screens? Replace the
+    # lambda with `pages:` and give epaper_gallery a `page_id` (see README).
+    lambda: id(gallery).draw(it);
 
 # ---------------------------------------------------------------- SD card
 # SDIO 4-bit, pins per Lissors/tintenklecks config.h (same board)

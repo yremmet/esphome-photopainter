@@ -12,6 +12,7 @@ except ImportError:
 DEPENDENCIES = ["display"]
 
 CONF_DISPLAY_ID = "display_id"
+CONF_PAGE_ID = "page_id"
 CONF_ROOT_PATH = "root_path"
 CONF_SCALE = "scale"
 CONF_DITHER = "dither"
@@ -70,6 +71,8 @@ CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(EPaperGallery),
         cv.Required(CONF_DISPLAY_ID): cv.use_id(display.Display),
+        # page whose lambda calls id(gallery).draw(it); shown automatically for each new image
+        cv.Optional(CONF_PAGE_ID): cv.use_id(display.DisplayPage),
         cv.Optional(CONF_ROOT_PATH, default="/sdcard/images"): cv.string,
         cv.Optional(CONF_SCALE, default="fit"): cv.enum(SCALE_MODES, lower=True),
         cv.Optional(CONF_DITHER, default="floyd_steinberg"): _dither,
@@ -87,6 +90,9 @@ async def to_code(config):
     await cg.register_component(var, config)
     disp = await cg.get_variable(config[CONF_DISPLAY_ID])
     cg.add(var.set_display(disp))
+    if CONF_PAGE_ID in config:
+        page = await cg.get_variable(config[CONF_PAGE_ID])
+        cg.add(var.set_page(page))
     cg.add(var.set_root_path(config[CONF_ROOT_PATH]))
     cg.add(var.set_scale_mode(config[CONF_SCALE]))
     cg.add(var.set_dither_method(config[CONF_DITHER]))
