@@ -32,7 +32,37 @@ static const uint8_t PALETTE[6][3] = {
     {0, 255, 0},      // green
 };
 
-// Runtime-selectable palettes, same order as above
+static constexpr int RENDER_TASK_CORE = 1;
+static constexpr uint32_t RENDER_TASK_STACK = 12 * 1024;
+
+// Feed the task watchdog only if the calling task is subscribed to it
+// (the main loop is, our render task is not).
+static inline void feed_wdt_safe() {
+  if (esp_task_wdt_status(nullptr) == ESP_OK)
+    esp_task_wdt_reset();
+}
+
+static void render_task_entry(void *arg) {
+  static_cast<EPaperGallery *>(arg)->render_task_body_();
+  vTaskDelete(nullptr);
+}
+
+static void *psram_alloc(size_t n) {
+  void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (p == nullptr)
+    p = malloc(n);
+  return p;
+}
+
+static inline uint32_t rd32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t) p[3] << 24); }
+static inline uint16_t rd16(const uint8_t *p) { return p[0] | (p[1] << 8); }
+
+static bool ends_with(const std::string &s, const char *suffix) {
+  size_t n = strlen(suffix);
+  return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
+}
+
+// Runtime-selectable palettes, order: black white yellow red blue green
 static const int16_t MEASURED_PALETTE[6][3] = {  // first calibration photo, glare-affected
     {45, 30, 31}, {176, 176, 176}, {196, 176, 49}, {96, 20, 14}, {43, 56, 133}, {56, 72, 57}};
 static const int16_t AITJCIZE_PALETTE[6][3] = {  // "perceived" Spectra 6, aitjcize/epaper-image-convert
