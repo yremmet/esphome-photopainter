@@ -12,6 +12,7 @@ namespace esphome {
 namespace epaper_gallery {
 
 enum ScaleMode { SCALE_FIT, SCALE_FILL };
+enum ColorSpace { CS_RGB, CS_LAB };
 
 /**
  * Loads JPEG/BMP files from a mounted filesystem (SD card), scales them to the
@@ -30,6 +31,11 @@ class EPaperGallery : public Component {
   void set_scale_mode(ScaleMode m) { this->scale_mode_ = m; }
   void set_dither(bool d) { this->dither_ = d; }
   void set_auto_rotate(bool r) { this->auto_rotate_ = r; }
+  void set_color_space(ColorSpace cs) { this->color_space_ = cs; }
+  /// Calibrated appearance of palette entry i (0 black, 1 white, 2 yellow, 3 red, 4 blue, 5 green)
+  void set_match_color(int i, uint8_t r, uint8_t g, uint8_t b);
+  /// Draw the six solid colour patches for calibration (call display update yourself afterwards)
+  void draw_calibration_pattern();
 
   float get_setup_priority() const override { return setup_priority::LATE; }
   void setup() override;
@@ -63,6 +69,8 @@ class EPaperGallery : public Component {
   bool decode_bmp_(uint8_t *data, size_t size);
   void resample_();
   void dither_();
+  void prepare_palette_();
+  int nearest_(const int v[3]) const;
   void blit_and_update_();
   void free_buffers_();
 
@@ -71,6 +79,10 @@ class EPaperGallery : public Component {
   ScaleMode scale_mode_{SCALE_FIT};
   bool dither_{true};
   bool auto_rotate_{true};
+  ColorSpace color_space_{CS_LAB};
+  int16_t match_rgb_[6][3] = {{-1, -1, -1}, {-1, -1, -1}, {-1, -1, -1},
+                              {-1, -1, -1}, {-1, -1, -1}, {-1, -1, -1}};  // -1 = use built-in default
+  float match_lab_[6][3];     // same, in CIELAB (computed when rendering)
 
   std::vector<std::string> files_;
   int current_index_{-1};

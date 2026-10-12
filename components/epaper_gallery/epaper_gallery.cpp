@@ -1,4 +1,4 @@
-#include "epaper_gallery.h"
+<LeftMouse>#include "epaper_gallery.h"
 
 #include <JPEGDEC.h>
 #include <esp_heap_caps.h>
@@ -34,7 +34,7 @@ static const uint8_t PALETTE[6][3] = {
 // Colours used for the "which palette entry is closest" decision. The real
 // panel pigments are far less saturated than pure RGB; using something closer
 // to reality here makes photos look noticeably better. Tweak to taste.
-static const int16_t MATCH_PALETTE[6][3] = {
+static const int16_t DEFAULT_MATCH_PALETTE[6][3] = {
     {25, 25, 30},     // black
     {235, 235, 230},  // white
     {230, 210, 60},   // yellow
@@ -75,7 +75,97 @@ static bool ends_with(const std::string &s, const char *suffix) {
 
 // ---------------------------------------------------------------- lifecycle
 
-void EPaperGallery::setup() { this->refresh_list(); }
+void EPaperGallery::setup() {
+  // apply defaults for any palette entry the YAML did not override (set_match_color sets a flag via r|g|b != -1)
+  for (int i = 0; i < 6; i++) {
+    if (this->match_rgb_[i][0] < 0) {
+      for (int c = 0; c < 3; c++)
+        this->match_rgb_[i][c] = DEFAULT_MATCH_PALETTE[i][c];
+    }
+  }
+  this->refresh_list();
+}
+
+void EPaperGallery::set_match_color(int i, uint8_t r, uint8_t g, uint8_t b) {
+  if (i < 0 || i > 5)
+    return;
+  this->match_rgb_[i][0] = r;
+  this->match_rgb_[i][1] = g;
+  this->match_rgb_[i][2] = b;
+}
+
+void EPaperGallery::draw_calibration_pattern() {
+  const int w = this->display_->get_width(), h = this->display_->get_height();
+  const int cols = 3, rows = 2;
+  const int pw = w / cols, ph = h / rows;
+  for (int i = 0; i < 6; i++) {
+    const int x = (i % cols) * pw, y = (i / cols) * ph;
+    this->display_->filled_rectangle(x, y, pw, ph, Color(PALETTE[i][0], PALETTE[i][1], PALETTE[i][2]));
+  }
+  ESP_LOGI(TAG, "Calibration pattern drawn: black white yellow / red blue green");
+}
+
+// ---------------------------------------------------------------- colour maths
+
+// sRGB (0..255) -> CIELAB (D65). Linearisation via LUT, cube root via cbrtf.
+static float srgb_lin_lut[256];
+static bool srgb_lut_ready = false;
+
+static inline float lab_f(float t) { return t > 0.008856f ? cbrtf(t) : (7.787f * t + 16.0f / 116.0f); }
+
+static void rgb_to_lab(int r, int g, int b, float out[3]) {
+  if (!srgb_lut_ready) {
+    for (int i = 0; i < 256; i++) {
+      float c = i / 255.0f;
+      srgb_lin_lut[i] = c <= 0.04045f ? c / 12.92f : powf((c + 0.055f) / 1.055f, 2.4f);
+    }
+    srgb_lut_ready = true;
+  }
+  const float R = srgb_lin_lut[r], G = srgb_lin_lut[g], B = srgb_lin_lut[b];
+  const float X = (0.4124f * R + 0.3576f * G + 0.1805f * B) / 0.95047f;
+  const float Y = (0.2126f * R + 0.7152f * G + 0.0722f * B);
+  const float Z = (0.0193f * R + 0.1192f * G + 0.9505f * B) / 1.08883f;
+  const float fx = lab_f(X), fy = lab_f(Y), fz = lab_f(Z);
+  out[0] = 116.0f * fy - 16.0f;
+  out[1] = 500.0f * (fx - fy);
+  out[2] = 200.0f * (fy - fz);
+}
+
+void EPaperGallery::prepare_palette_() {
+  for (int i = 0; i < 6; i++)
+    rgb_to_lab(this->match_rgb_[i][0], this->match_rgb_[i][1], this->match_rgb_[i][2], this->match_lab_[i]);
+}
+
+int EPaperGallery::nearest_(const int v[3]) const {
+  int best = 0;
+  float best_d = 1e30f;
+  if (this->color_space_ == CS_LAB) {
+    float lab[3];
+    rgb_to_lab(v[0], v[1], v[2], lab);
+    for (int k = 0; k < 6; k++) {
+      const float dl = lab[0] - this->match_lab_[k][0];
+      const float da = lab[1] - this->match_lab_[k][1];
+      const float db = lab[2] - this->match_lab_[k][2];
+      const float d = dl * dl + da * da + db * db;
+      if (d < best_d) {
+        best_d = d;
+        best = k;
+      }
+    }
+  } else {
+    for (int k = 0; k < 6; k++) {
+      const float dr = v[0] - this->match_rgb_[k][0];
+      const float dg = v[1] - this->match_rgb_[k][1];
+      const float db = v[2] - this->match_rgb_[k][2];
+      const float d = dr * dr + dg * dg + db * db;
+      if (d < best_d) {
+        best_d = d;
+        best = k;
+      }
+    }
+  }
+  return best;
+}
 
 void EPaperGallery::dump_config() {
   ESP_LOGCONFIG(TAG, "E-Paper Gallery:");
@@ -83,6 +173,10 @@ void EPaperGallery::dump_config() {
   ESP_LOGCONFIG(TAG, "  Scale: %s", this->scale_mode_ == SCALE_FILL ? "fill" : "fit");
   ESP_LOGCONFIG(TAG, "  Dither: %s", YESNO(this->dither_));
   ESP_LOGCONFIG(TAG, "  Auto-rotate: %s", YESNO(this->auto_rotate_));
+  ESP_LOGCONFIG(TAG, "  Colour space: %s", this->color_space_ == CS_LAB ? "lab" : "rgb");
+  for (int i = 0; i < 6; i++)
+    ESP_LOGCONFIG(TAG, "  Palette[%d]: #%02X%02X%02X", i, this->match_rgb_[i][0], this->match_rgb_[i][1],
+                  this->match_rgb_[i][2]);
   ESP_LOGCONFIG(TAG, "  Images found: %u", (unsigned) this->files_.size());
 }
 
@@ -474,6 +568,7 @@ void EPaperGallery::dither_() {
     ESP_LOGE(TAG, "Out of memory for index buffer");
     return;
   }
+  this->prepare_palette_();
 
   // error buffers for the current and next row, index (x+1) to allow x-1/x+1 without bounds checks
   std::vector<int16_t> err_cur((w + 2) * 3, 0);
@@ -494,20 +589,7 @@ void EPaperGallery::dither_() {
         v[c] = t < 0 ? 0 : (t > 255 ? 255 : t);
       }
 
-      // nearest palette entry (squared euclidean in RGB against the "real" colours)
-      int best = 0;
-      int32_t best_d = INT32_MAX;
-      for (int k = 0; k < 6; k++) {
-        int32_t dr = v[0] - MATCH_PALETTE[k][0];
-        int32_t dg = v[1] - MATCH_PALETTE[k][1];
-        int32_t db = v[2] - MATCH_PALETTE[k][2];
-        int32_t dd = dr * dr + dg * dg + db * db;
-        if (dd < best_d) {
-          best_d = dd;
-          best = k;
-        }
-      }
-
+      const int best = this->nearest_(v);
       this->idx_[(size_t) y * w + x] = (uint8_t) best;
 
       if (!this->dither_)
@@ -515,7 +597,7 @@ void EPaperGallery::dither_() {
 
       // Floyd–Steinberg: 7/16 right, 3/16 below-left, 5/16 below, 1/16 below-right
       for (int c = 0; c < 3; c++) {
-        int e = v[c] - MATCH_PALETTE[best][c];
+        int e = v[c] - this->match_rgb_[best][c];
         err_cur[(x + 1 + dir) * 3 + c] += (e * 7) / 16;
         err_next[(x + 1 - dir) * 3 + c] += (e * 3) / 16;
         err_next[(x + 1) * 3 + c] += (e * 5) / 16;
