@@ -68,7 +68,7 @@ class EPaperGallery : public Component {
   bool decode_jpeg_(uint8_t *data, size_t size);
   bool decode_bmp_(uint8_t *data, size_t size);
   void resample_();
-  void dither_();
+  void quantize_();
   void prepare_palette_();
   int nearest_(const int v[3]) const;
   void blit_and_update_();

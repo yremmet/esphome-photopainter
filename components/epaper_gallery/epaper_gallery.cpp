@@ -349,7 +349,7 @@ bool EPaperGallery::render_(const std::string &path) {
   ESP_LOGI(TAG, "Resampled to %dx%d in %u ms", this->dst_w_, this->dst_h_, (unsigned) (t2 - t1));
   feed_wdt_safe();
 
-  this->dither_();
+  this->quantize_();
   free(this->dst_);
   this->dst_ = nullptr;
   const uint32_t t3 = millis();
@@ -560,7 +560,7 @@ void EPaperGallery::resample_() {
 
 // ---------------------------------------------------------------- dither
 
-void EPaperGallery::dither_() {
+void EPaperGallery::quantize_() {
   const int w = this->dst_w_;
   const int h = this->dst_h_;
   this->idx_ = (uint8_t *) psram_alloc((size_t) w * h);
