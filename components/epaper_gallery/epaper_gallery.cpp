@@ -1,4 +1,4 @@
-<LeftMouse>#include "epaper_gallery.h"
+#include "epaper_gallery.h"
 
 #include <JPEGDEC.h>
 #include <esp_heap_caps.h>
