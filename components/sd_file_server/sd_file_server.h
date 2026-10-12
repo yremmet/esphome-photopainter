@@ -33,6 +33,7 @@ class SDFileServer : public Component, public AsyncWebHandler {
   bool deletion_enabled_;
   bool download_enabled_;
   bool upload_enabled_;
+  FILE *upload_file_{nullptr};  // open while a multipart upload is streaming in
 
   std::string build_prefix() const;
   std::string extract_path_from_url(std::string const &) const;

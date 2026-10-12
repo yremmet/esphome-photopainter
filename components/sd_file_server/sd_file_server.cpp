@@ -71,18 +71,53 @@ void SDFileServer::handleUpload(AsyncWebServerRequest *request, const std::strin
     return;
   }
   std::string file_name(filename.c_str());
+  std::string file_path = Path::join(path, file_name);
+#ifdef USE_ESP_IDF
+  // Keep the file open for the whole upload: ESPHome's IDF server calls us once with
+  // (index 0, no data) to start, then per chunk, then (final, no data) to finish.
+  if (index == 0 && (len == 0 || this->upload_file_ == nullptr)) {
+    if (this->upload_file_ != nullptr)
+      fclose(this->upload_file_);  // left over from an aborted upload
+    ESP_LOGD(TAG, "uploading file %s to %s", file_name.c_str(), path.c_str());
+    this->upload_file_ = this->sd_mmc_card_->open_file(file_path.c_str(), "w");
+  }
+  bool ok = this->upload_file_ != nullptr;
+  if (ok && data != nullptr && len > 0 && fwrite(data, 1, len, this->upload_file_) != len) {
+    ESP_LOGE(TAG, "Write failed at offset %u", (unsigned) index);
+    ok = false;
+  }
+  if (!ok && this->upload_file_ != nullptr) {
+    fclose(this->upload_file_);
+    this->upload_file_ = nullptr;
+  }
+  if (!final)
+    return;
+  if (this->upload_file_ != nullptr) {
+    fclose(this->upload_file_);
+    this->upload_file_ = nullptr;
+    this->sd_mmc_card_->refresh_sensors();
+    ESP_LOGI(TAG, "uploaded %s (%u bytes)", file_path.c_str(), (unsigned) index);
+  } else {
+    ok = false;
+  }
+  auto response = ok ? request->beginResponse(201, "text/html", "upload success")
+                     : request->beginResponse(500, "application/json", "{ \"error\": \"upload failed\" }");
+  response->addHeader("Connection", "close");
+  request->send(response);
+#else
   if (index == 0) {
     ESP_LOGD(TAG, "uploading file %s to %s", file_name.c_str(), path.c_str());
-    this->sd_mmc_card_->write_file(Path::join(path, file_name).c_str(), data, len);
+    this->sd_mmc_card_->write_file(file_path.c_str(), data, len);
     return;
   }
-  this->sd_mmc_card_->append_file(Path::join(path, file_name).c_str(), data, len);
+  this->sd_mmc_card_->append_file(file_path.c_str(), data, len);
   if (final) {
     auto response = request->beginResponse(201, "text/html", "upload success");
     response->addHeader("Connection", "close");
     request->send(response);
     return;
   }
+#endif
 }
 
 void SDFileServer::set_url_prefix(std::string const &prefix) { this->url_prefix_ = prefix; }

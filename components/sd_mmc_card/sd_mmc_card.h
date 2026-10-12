@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdio>
 #include "esphome/core/gpio.h"
 #include "esphome/core/defines.h"
 #include "esphome/core/component.h"
@@ -58,6 +59,13 @@ class SdMmc : public Component {
   void write_file(const char *path, const uint8_t *buffer, size_t len, const char *mode);
   void write_file(const char *path, const uint8_t *buffer, size_t len);
   void append_file(const char *path, const uint8_t *buffer, size_t len);
+#ifdef USE_ESP_IDF
+  /// Open a file below the mount point for streaming writes (e.g. uploads). The caller
+  /// fcloses it and then calls refresh_sensors(). write/append_file reopen the file per
+  /// call, which gets quadratically slow for big files on FAT.
+  FILE *open_file(const char *path, const char *mode);
+#endif
+  void refresh_sensors() { this->update_sensors(); }
   bool delete_file(const char *path);
   bool delete_file(std::string const &path);
   bool create_directory(const char *path);

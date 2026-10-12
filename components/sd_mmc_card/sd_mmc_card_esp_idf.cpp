@@ -89,6 +89,14 @@ void SdMmc::write_file(const char *path, const uint8_t *buffer, size_t len, cons
   this->update_sensors();
 }
 
+FILE *SdMmc::open_file(const char *path, const char *mode) {
+  std::string absolut_path = build_path(path);
+  FILE *file = fopen(absolut_path.c_str(), mode);
+  if (file == nullptr)
+    ESP_LOGE(TAG, "Failed to open %s: %s", absolut_path.c_str(), strerror(errno));
+  return file;
+}
+
 bool SdMmc::create_directory(const char *path) {
   ESP_LOGV(TAG, "Create directory: %s", path);
   std::string absolut_path = build_path(path);
