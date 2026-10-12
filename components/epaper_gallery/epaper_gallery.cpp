@@ -202,6 +202,7 @@ void EPaperGallery::dump_config() {
   static const char *const DITHER_NAMES[] = {"none", "floyd_steinberg", "atkinson", "jarvis_judice_ninke"};
   ESP_LOGCONFIG(TAG, "  Dither: %s (strength %.0f%%, error clamp %d)", DITHER_NAMES[this->dither_method_],
                 this->dither_strength_ * 100.0f, this->error_clamp_);
+  ESP_LOGCONFIG(TAG, "  Tone compression: %.0f%%", this->tone_compression_ * 100.0f);
   ESP_LOGCONFIG(TAG, "  Auto-rotate: %s", YESNO(this->auto_rotate_));
   ESP_LOGCONFIG(TAG, "  Colour space: %s", this->color_space_ == CS_LAB ? "lab" : "rgb");
   for (int i = 0; i < 6; i++)
@@ -641,6 +642,20 @@ void EPaperGallery::quantize_() {
   const int clamp = this->error_clamp_;
   const int strength = (int) (this->dither_strength_ * 256.0f);  // 8.8 fixed point
 
+  // Tone compression: squeeze the photo's 0..255 into the panel's black..white range
+  // (palette entries 0/1), so highlights brighter than panel white (a white dress)
+  // and the deepest shadows keep their texture instead of clipping solid.
+  uint8_t tone[3][256];
+  const float tone_k = this->tone_compression_;
+  for (int c = 0; c < 3; c++) {
+    const float lo = this->match_rgb_[0][c], hi = this->match_rgb_[1][c];
+    for (int i = 0; i < 256; i++) {
+      const float mapped = lo + i * (hi - lo) / 255.0f;
+      const float t = i + (mapped - i) * tone_k;
+      tone[c][i] = (uint8_t) (t < 0 ? 0 : (t > 255 ? 255 : t + 0.5f));
+    }
+  }
+
   // three error rows (current + 2 ahead), 2 px padding each side so x±2 needs no bounds checks
   const int stride = (w + 4) * 3;
   std::vector<int16_t> err(stride * 3, 0);
@@ -660,7 +675,7 @@ void EPaperGallery::quantize_() {
         // clamp accumulated error: the sparse 6-colour gamut otherwise lets error
         // pile up in flat areas and bleed out as colour streaks
         const int e = ec[c] < -clamp ? -clamp : (ec[c] > clamp ? clamp : ec[c]);
-        const int t = p[c] + e;
+        const int t = tone[c][p[c]] + e;
         v[c] = t < 0 ? 0 : (t > 255 ? 255 : t);
       }
 

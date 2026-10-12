@@ -243,6 +243,24 @@ select:
 
 number:
   - platform: template
+    id: tone_compression_number
+    name: Tone compression
+    icon: mdi:contrast-box
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 44
+    entity_category: config
+    unit_of_measurement: "%"
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 100
+    on_value:
+      - lambda: id(gallery).set_tone_compression(x / 100.0f);
+      - script.execute: rerender
+  - platform: template
     id: error_clamp_number
     name: Dither error clamp
     web_server:

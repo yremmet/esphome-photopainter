@@ -38,6 +38,8 @@ class EPaperGallery : public Component {
   void set_error_clamp(int c) { this->error_clamp_ = c; }
   /// Fraction of the quantisation error that gets diffused (0..1)
   void set_dither_strength(float s) { this->dither_strength_ = s; }
+  /// Map the photo's 0..255 into the panel's black..white range (0 = off, 1 = full)
+  void set_tone_compression(float k) { this->tone_compression_ = k; }
   void set_auto_rotate(bool r) { this->auto_rotate_ = r; }
   void set_color_space(ColorSpace cs) { this->color_space_ = cs; }
   /// Calibrated appearance of palette entry i (0 black, 1 white, 2 yellow, 3 red, 4 blue, 5 green)
@@ -99,6 +101,7 @@ class EPaperGallery : public Component {
   DitherMethod dither_method_{DITHER_FLOYD_STEINBERG};
   int error_clamp_{64};
   float dither_strength_{1.0f};
+  float tone_compression_{1.0f};
   bool auto_rotate_{true};
   ColorSpace color_space_{CS_LAB};
   // Colours used for the "which palette entry is closest" decision (order: black white

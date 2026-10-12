@@ -21,6 +21,7 @@ CONF_COLOR_SPACE = "color_space"
 CONF_PALETTE = "palette"
 CONF_ERROR_CLAMP = "error_clamp"
 CONF_DITHER_STRENGTH = "dither_strength"
+CONF_TONE_COMPRESSION = "tone_compression"
 
 ns = cg.esphome_ns.namespace("epaper_gallery")
 EPaperGallery = ns.class_("EPaperGallery", cg.Component)
@@ -78,6 +79,7 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Optional(CONF_DITHER, default="floyd_steinberg"): _dither,
         cv.Optional(CONF_ERROR_CLAMP, default=64): cv.int_range(min=0, max=255),
         cv.Optional(CONF_DITHER_STRENGTH, default="100%"): cv.percentage,
+        cv.Optional(CONF_TONE_COMPRESSION, default="100%"): cv.percentage,
         cv.Optional(CONF_AUTO_ROTATE, default=True): cv.boolean,
         cv.Optional(CONF_COLOR_SPACE, default="lab"): cv.enum(COLOR_SPACES, lower=True),
         cv.Optional(CONF_PALETTE): PALETTE_SCHEMA,
@@ -98,6 +100,7 @@ async def to_code(config):
     cg.add(var.set_dither_method(config[CONF_DITHER]))
     cg.add(var.set_error_clamp(config[CONF_ERROR_CLAMP]))
     cg.add(var.set_dither_strength(config[CONF_DITHER_STRENGTH]))
+    cg.add(var.set_tone_compression(config[CONF_TONE_COMPRESSION]))
     cg.add(var.set_auto_rotate(config[CONF_AUTO_ROTATE]))
     cg.add(var.set_color_space(config[CONF_COLOR_SPACE]))
     if CONF_PALETTE in config:
