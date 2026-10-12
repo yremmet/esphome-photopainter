@@ -98,9 +98,13 @@ class EPaperGallery : public Component {
   float dither_strength_{1.0f};
   bool auto_rotate_{true};
   ColorSpace color_space_{CS_LAB};
-  int16_t match_rgb_[6][3] = {{-1, -1, -1}, {-1, -1, -1}, {-1, -1, -1},
-                              {-1, -1, -1}, {-1, -1, -1}, {-1, -1, -1}};  // -1 = use built-in default
-  int16_t config_rgb_[6][3];  // match_rgb_ after setup(), restored by preset "config"
+  // Colours used for the "which palette entry is closest" decision (order: black white
+  // yellow red blue green). Built-in guess; YAML `palette:` overrides it (= preset "config").
+#define EPAPER_GALLERY_DEFAULT_PALETTE \
+  { {25, 25, 30}, {235, 235, 230}, {230, 210, 60}, {190, 40, 40}, {40, 60, 170}, {50, 140, 70} }
+  int16_t match_rgb_[6][3] = EPAPER_GALLERY_DEFAULT_PALETTE;   // active, may be switched by preset
+  int16_t config_rgb_[6][3] = EPAPER_GALLERY_DEFAULT_PALETTE;  // what preset "config" restores
+#undef EPAPER_GALLERY_DEFAULT_PALETTE
   float match_lab_[6][3];     // same, in CIELAB (computed when rendering)
 
   std::vector<std::string> files_;

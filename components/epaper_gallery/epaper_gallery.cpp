@@ -31,48 +31,6 @@ static const uint8_t PALETTE[6][3] = {
     {0, 255, 0},      // green
 };
 
-// Colours used for the "which palette entry is closest" decision. The real
-// panel pigments are far less saturated than pure RGB; using something closer
-// to reality here makes photos look noticeably better. Tweak to taste.
-static const int16_t DEFAULT_MATCH_PALETTE[6][3] = {
-    {25, 25, 30},     // black
-    {235, 235, 230},  // white
-    {230, 210, 60},   // yellow
-    {190, 40, 40},    // red
-    {40, 60, 170},    // blue
-    {50, 140, 70},    // green
-};
-
-static constexpr int RENDER_TASK_CORE = 1;
-static constexpr uint32_t RENDER_TASK_STACK = 12 * 1024;
-
-// Feed the task watchdog only if the calling task is subscribed to it
-// (the main loop is, our render task is not).
-static inline void feed_wdt_safe() {
-  if (esp_task_wdt_status(nullptr) == ESP_OK)
-    esp_task_wdt_reset();
-}
-
-static void render_task_entry(void *arg) {
-  static_cast<EPaperGallery *>(arg)->render_task_body_();
-  vTaskDelete(nullptr);
-}
-
-static void *psram_alloc(size_t n) {
-  void *p = heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
-  if (p == nullptr)
-    p = malloc(n);
-  return p;
-}
-
-static inline uint32_t rd32(const uint8_t *p) { return p[0] | (p[1] << 8) | (p[2] << 16) | ((uint32_t) p[3] << 24); }
-static inline uint16_t rd16(const uint8_t *p) { return p[0] | (p[1] << 8); }
-
-static bool ends_with(const std::string &s, const char *suffix) {
-  size_t n = strlen(suffix);
-  return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
-}
-
 // Runtime-selectable palettes, same order as above
 static const int16_t MEASURED_PALETTE[6][3] = {  // first calibration photo, glare-affected
     {45, 30, 31}, {176, 176, 176}, {196, 176, 49}, {96, 20, 14}, {43, 56, 133}, {56, 72, 57}};
@@ -84,23 +42,17 @@ static const int16_t WAVESHARE_PALETTE[6][3] = {  // pure RGB, as in the Wavesha
 // ---------------------------------------------------------------- lifecycle
 
 void EPaperGallery::setup() {
-  // apply defaults for any palette entry the YAML did not override (set_match_color sets a flag via r|g|b != -1)
-  for (int i = 0; i < 6; i++) {
-    if (this->match_rgb_[i][0] < 0) {
-      for (int c = 0; c < 3; c++)
-        this->match_rgb_[i][c] = DEFAULT_MATCH_PALETTE[i][c];
-    }
-  }
-  memcpy(this->config_rgb_, this->match_rgb_, sizeof(this->config_rgb_));
   this->refresh_list();
 }
 
 void EPaperGallery::set_match_color(int i, uint8_t r, uint8_t g, uint8_t b) {
   if (i < 0 || i > 5)
     return;
-  this->match_rgb_[i][0] = r;
-  this->match_rgb_[i][1] = g;
-  this->match_rgb_[i][2] = b;
+  // config_rgb_ too, so preset "config" means "the YAML palette" no matter in which
+  // order the restored preset select and this setter run during boot
+  this->config_rgb_[i][0] = this->match_rgb_[i][0] = r;
+  this->config_rgb_[i][1] = this->match_rgb_[i][1] = g;
+  this->config_rgb_[i][2] = this->match_rgb_[i][2] = b;
 }
 
 bool EPaperGallery::set_palette_preset(const std::string &name) {
