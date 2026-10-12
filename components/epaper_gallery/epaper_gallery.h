@@ -68,7 +68,8 @@ class EPaperGallery : public Component {
   bool show(const std::string &filename);
   bool show_next();
   bool show_previous();
-  bool is_busy() const { return this->task_running_.load(); }
+  /// true while an image is queued or being decoded/scaled/dithered (not the panel refresh itself)
+  bool is_busy() const { return this->task_running_.load() || !this->pending_.empty(); }
 
   void add_on_list_changed_callback(std::function<void()> &&cb) { this->list_changed_cb_.add(std::move(cb)); }
   void add_on_image_shown_callback(std::function<void(std::string)> &&cb) {

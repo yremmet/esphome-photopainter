@@ -278,7 +278,24 @@ number:
       - lambda: id(gallery).set_dither_strength(x / 100.0f);
       - script.execute: rerender
 
+binary_sensor:
+  - platform: template
+    name: Rendering
+    icon: mdi:cog-sync
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 12
+    lambda: return id(gallery).is_busy();
+
 button:
+  - platform: template
+    name: Re-render image
+    icon: mdi:image-refresh
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 22
+    on_press:
+      - script.execute: rerender
   - platform: template
     name: Refresh image list
     web_server:
