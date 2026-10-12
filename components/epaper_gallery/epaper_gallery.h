@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -32,18 +33,35 @@ class EPaperGallery : public Component {
   void set_display(display::Display *d) { this->display_ = d; }
   void set_root_path(const std::string &p) { this->root_path_ = p; }
   void set_scale_mode(ScaleMode m) { this->scale_mode_ = m; }
-  // Read at render start, so these can also be changed at runtime (e.g. from a
-  // template number/select) and take effect with the next image.
-  void set_dither_method(DitherMethod m) { this->dither_method_ = m; }
+  // Rendering settings. Changing one at runtime (e.g. from a template number/select)
+  // re-renders the current image after a short debounce. Per-image values are loaded
+  // from "<image>.cfg" (or "_default.cfg") next to the image when it is shown.
+  void set_dither_method(DitherMethod m) { this->update_(this->dither_method_, m); }
   /// Max accumulated error per channel added to a pixel (0..255, 255 = no clamp)
-  void set_error_clamp(int c) { this->error_clamp_ = c; }
+  void set_error_clamp(int c) { this->update_(this->error_clamp_, c); }
   /// Fraction of the quantisation error that gets diffused (0..1)
-  void set_dither_strength(float s) { this->dither_strength_ = s; }
+  void set_dither_strength(float s) { this->update_(this->dither_strength_, s); }
   /// Map the photo's 0..255 into the panel's black..white range (0 = off, 1 = full)
-  void set_tone_compression(float k) { this->tone_compression_ = k; }
-  void set_tone_curve(ToneCurve c) { this->tone_curve_ = c; }
+  void set_tone_compression(float k) { this->update_(this->tone_compression_, k); }
+  void set_tone_curve(ToneCurve c) { this->update_(this->tone_curve_, c); }
   /// Colour saturation applied before dithering (1 = unchanged, 1.3 = +30 %)
-  void set_saturation(float s) { this->saturation_ = s; }
+  void set_saturation(float s) { this->update_(this->saturation_, s); }
+
+  const std::string &get_palette_preset() const { return this->palette_preset_; }
+  const char *get_dither_method_name() const;
+  const char *get_tone_curve_name() const;
+  int get_error_clamp() const { return this->error_clamp_; }
+  float get_dither_strength() const { return this->dither_strength_; }
+  float get_tone_compression() const { return this->tone_compression_; }
+  float get_saturation() const { return this->saturation_; }
+
+  /// Write the current settings to "<current image>.cfg" (for_image) or "_default.cfg"
+  bool save_settings(bool for_image);
+  /// Re-render the current image with the current settings (no settings file is loaded)
+  bool rerender();
+  /// Fired after settings were loaded from a file, so UI entities can be synced
+  void add_on_settings_loaded_callback(std::function<void()> &&cb) { this->settings_loaded_cb_.add(std::move(cb)); }
+
   void set_auto_rotate(bool r) { this->auto_rotate_ = r; }
   void set_color_space(ColorSpace cs) { this->color_space_ = cs; }
   /// Calibrated appearance of palette entry i (0 black, 1 white, 2 yellow, 3 red, 4 blue, 5 green)
@@ -99,6 +117,22 @@ class EPaperGallery : public Component {
   int nearest_(const int v[3]) const;
   void present_(uint8_t *idx, int w, int h);
   void free_buffers_();
+  template<typename T> void update_(T &field, T value) {
+    if (field == value)
+      return;
+    field = value;
+    this->settings_changed_();
+  }
+  void update_(float &field, float value) {  // UI round trips (x*100/100) aren't bit-exact
+    if (std::fabs(field - value) < 0.001f)
+      return;
+    field = value;
+    this->settings_changed_();
+  }
+  void settings_changed_();
+  bool apply_palette_(const std::string &name);
+  bool load_settings_(const std::string &path);
+  std::string settings_path_(bool for_image) const;
 
   display::Display *display_{nullptr};
   display::DisplayPage *page_{nullptr};
@@ -110,6 +144,10 @@ class EPaperGallery : public Component {
   float tone_compression_{1.0f};
   ToneCurve tone_curve_{TONE_LINEAR};
   float saturation_{1.3f};
+  std::string palette_preset_{"config"};
+  bool ready_{false};          // setup() done: setting changes trigger a re-render
+  uint32_t rerender_at_{0};    // debounced re-render deadline (millis), 0 = none
+  bool keep_settings_{false};  // pending render is a re-render: don't load a settings file
   bool auto_rotate_{true};
   ColorSpace color_space_{CS_LAB};
   // Colours used for the "which palette entry is closest" decision (order: black white
@@ -147,6 +185,7 @@ class EPaperGallery : public Component {
 
   CallbackManager<void()> list_changed_cb_;
   CallbackManager<void(std::string)> image_shown_cb_;
+  CallbackManager<void()> settings_loaded_cb_;
 };
 
 }  // namespace epaper_gallery

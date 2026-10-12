@@ -54,6 +54,16 @@ esphome:
             id(gallery).add_on_image_shown_callback([](std::string f) {
               id(image_select).publish_state(f);
             });
+            // per-image settings loaded from "<image>.cfg" / "_default.cfg" -> sync the UI
+            id(gallery).add_on_settings_loaded_callback([]() {
+              id(palette_select).publish_state(id(gallery).get_palette_preset());
+              id(dither_select).publish_state(std::string(id(gallery).get_dither_method_name()));
+              id(tone_curve_select).publish_state(std::string(id(gallery).get_tone_curve_name()));
+              id(error_clamp_number).publish_state(id(gallery).get_error_clamp());
+              id(dither_strength_number).publish_state(id(gallery).get_dither_strength() * 100.0f);
+              id(tone_compression_number).publish_state(id(gallery).get_tone_compression() * 100.0f);
+              id(saturation_number).publish_state(id(gallery).get_saturation() * 100.0f);
+            });
             id(gallery).refresh_list();
             // image remembered from before the reboot (still on the panel)
             if (!id(gallery).get_current().empty())
@@ -183,18 +193,8 @@ epaper_gallery:
   root_path: /sdcard/images   # mount point of sd_mmc_card + sub folder
   scale: fit                  # fit = white borders, fill = centered crop
   auto_rotate: true
-  # dither / error_clamp / dither_strength / palette preset are set from the
-  # web UI entities below (restored across reboots); YAML `palette:` = preset "config"
-
-script:
-  # re-render the current image so a changed setting is visible right away
-  - id: rerender
-    mode: restart
-    then:
-      - delay: 500ms   # coalesce quick slider changes
-      - lambda: |-
-          auto cur = id(gallery).get_current();
-          if (!cur.empty()) id(gallery).show(cur);
+  # palette, dither, tone and saturation come from the web UI entities below or a
+  # per-image "<image>.cfg" next to the photo; YAML `palette:` = preset "config"
 
 select:
   - platform: template
@@ -212,7 +212,6 @@ select:
     initial_option: linear
     on_value:
       - lambda: id(gallery).set_tone_curve((epaper_gallery::ToneCurve) i);
-      - script.execute: rerender
   - platform: template
     id: image_select
     name: Image
@@ -239,7 +238,6 @@ select:
     initial_option: config
     on_value:
       - lambda: id(gallery).set_palette_preset(x);
-      - script.execute: rerender
   - platform: template
     id: dither_select
     name: Dither method
@@ -255,7 +253,6 @@ select:
     initial_option: floyd_steinberg
     on_value:
       - lambda: id(gallery).set_dither_method((epaper_gallery::DitherMethod) i);
-      - script.execute: rerender
 
 number:
   - platform: template
@@ -275,7 +272,6 @@ number:
     initial_value: 130
     on_value:
       - lambda: id(gallery).set_saturation(x / 100.0f);
-      - script.execute: rerender
   - platform: template
     id: tone_compression_number
     name: Tone compression
@@ -293,7 +289,6 @@ number:
     initial_value: 100
     on_value:
       - lambda: id(gallery).set_tone_compression(x / 100.0f);
-      - script.execute: rerender
   - platform: template
     id: error_clamp_number
     name: Dither error clamp
@@ -310,7 +305,6 @@ number:
     initial_value: 64
     on_value:
       - lambda: id(gallery).set_error_clamp((int) x);
-      - script.execute: rerender
   - platform: template
     id: dither_strength_number
     name: Dither strength
@@ -328,7 +322,6 @@ number:
     initial_value: 100
     on_value:
       - lambda: id(gallery).set_dither_strength(x / 100.0f);
-      - script.execute: rerender
 
 binary_sensor:
   - platform: template
@@ -341,13 +334,28 @@ binary_sensor:
 
 button:
   - platform: template
+    name: Save settings for image
+    icon: mdi:content-save
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 47
+    on_press:
+      - lambda: id(gallery).save_settings(true);
+  - platform: template
+    name: Save settings as default
+    icon: mdi:content-save-cog
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 48
+    on_press:
+      - lambda: id(gallery).save_settings(false);
+  - platform: template
     name: Re-render image
     icon: mdi:image-refresh
     web_server:
       sorting_group_id: gallery_group
       sorting_weight: 22
     on_press:
-      - script.execute: rerender
   - platform: template
     name: Refresh image list
     web_server:

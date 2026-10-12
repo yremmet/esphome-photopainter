@@ -86,6 +86,7 @@ void EPaperGallery::setup() {
     this->current_file_ = last.name;
   }
   this->refresh_list();
+  this->ready_ = true;
 }
 
 void EPaperGallery::set_match_color(int i, uint8_t r, uint8_t g, uint8_t b) {
@@ -99,6 +100,15 @@ void EPaperGallery::set_match_color(int i, uint8_t r, uint8_t g, uint8_t b) {
 }
 
 bool EPaperGallery::set_palette_preset(const std::string &name) {
+  if (name == this->palette_preset_)
+    return true;
+  if (!this->apply_palette_(name))
+    return false;
+  this->settings_changed_();
+  return true;
+}
+
+bool EPaperGallery::apply_palette_(const std::string &name) {
   const int16_t(*src)[3];
   if (name == "config") {
     src = this->config_rgb_;
@@ -113,7 +123,97 @@ bool EPaperGallery::set_palette_preset(const std::string &name) {
     return false;
   }
   memcpy(this->match_rgb_, src, sizeof(this->match_rgb_));
+  this->palette_preset_ = name;
   ESP_LOGI(TAG, "Palette preset: %s", name.c_str());
+  return true;
+}
+
+// ---------------------------------------------------------------- settings
+
+static const char *const DITHER_NAMES[] = {"none", "floyd_steinberg", "atkinson", "jarvis_judice_ninke", "dizzy"};
+static const char *const TONE_CURVE_NAMES[] = {"linear", "soft"};
+
+const char *EPaperGallery::get_dither_method_name() const { return DITHER_NAMES[this->dither_method_]; }
+const char *EPaperGallery::get_tone_curve_name() const { return TONE_CURVE_NAMES[this->tone_curve_]; }
+
+void EPaperGallery::settings_changed_() {
+  if (this->ready_)
+    this->rerender_at_ = std::max<uint32_t>(millis() + 500, 1);  // debounce slider drags
+}
+
+bool EPaperGallery::rerender() {
+  if (this->current_file_.empty())
+    return false;
+  this->pending_ = this->current_file_;
+  this->keep_settings_ = true;
+  return true;
+}
+
+std::string EPaperGallery::settings_path_(bool for_image) const {
+  return this->root_path_ + "/" + (for_image ? this->current_file_ + ".cfg" : std::string("_default.cfg"));
+}
+
+bool EPaperGallery::save_settings(bool for_image) {
+  if (for_image && this->current_file_.empty()) {
+    ESP_LOGW(TAG, "No image shown, nothing to save settings for");
+    return false;
+  }
+  const std::string path = this->settings_path_(for_image);
+  FILE *f = fopen(path.c_str(), "w");
+  if (f == nullptr) {
+    ESP_LOGE(TAG, "Cannot write %s", path.c_str());
+    return false;
+  }
+  fprintf(f, "palette=%s\ndither=%s\nerror_clamp=%d\ndither_strength=%.2f\n", this->palette_preset_.c_str(),
+          this->get_dither_method_name(), this->error_clamp_, this->dither_strength_);
+  fprintf(f, "tone_compression=%.2f\ntone_curve=%s\nsaturation=%.2f\n", this->tone_compression_,
+          this->get_tone_curve_name(), this->saturation_);
+  fclose(f);
+  ESP_LOGI(TAG, "Settings saved to %s", path.c_str());
+  return true;
+}
+
+// key=value per line; unknown keys are ignored, missing keys keep their value.
+// Values are written straight into the fields (no re-render: we are about to render).
+bool EPaperGallery::load_settings_(const std::string &path) {
+  FILE *f = fopen(path.c_str(), "r");
+  if (f == nullptr)
+    return false;
+  char line[96];
+  while (fgets(line, sizeof(line), f) != nullptr) {
+    char *eq = strchr(line, '=');
+    if (eq == nullptr)
+      continue;
+    *eq = '\0';
+    char *val = eq + 1;
+    val[strcspn(val, "\r\n")] = '\0';
+    const std::string key = line;
+    if (key == "palette") {
+      this->apply_palette_(val);
+    } else if (key == "dither" || key == "tone_curve") {
+      const bool dither = key == "dither";
+      const char *const *names = dither ? DITHER_NAMES : TONE_CURVE_NAMES;
+      const int n = dither ? 5 : 2;
+      for (int i = 0; i < n; i++) {
+        if (strcmp(val, names[i]) == 0) {
+          if (dither)
+            this->dither_method_ = (DitherMethod) i;
+          else
+            this->tone_curve_ = (ToneCurve) i;
+        }
+      }
+    } else if (key == "error_clamp") {
+      this->error_clamp_ = atoi(val);
+    } else if (key == "dither_strength") {
+      this->dither_strength_ = strtof(val, nullptr);
+    } else if (key == "tone_compression") {
+      this->tone_compression_ = strtof(val, nullptr);
+    } else if (key == "saturation") {
+      this->saturation_ = strtof(val, nullptr);
+    }
+  }
+  fclose(f);
+  ESP_LOGI(TAG, "Settings loaded from %s", path.c_str());
   return true;
 }
 
@@ -199,11 +299,11 @@ void EPaperGallery::dump_config() {
   ESP_LOGCONFIG(TAG, "E-Paper Gallery:");
   ESP_LOGCONFIG(TAG, "  Root path: %s", this->root_path_.c_str());
   ESP_LOGCONFIG(TAG, "  Scale: %s", this->scale_mode_ == SCALE_FILL ? "fill" : "fit");
-  static const char *const DITHER_NAMES[] = {"none", "floyd_steinberg", "atkinson", "jarvis_judice_ninke", "dizzy"};
-  ESP_LOGCONFIG(TAG, "  Dither: %s (strength %.0f%%, error clamp %d)", DITHER_NAMES[this->dither_method_],
+  ESP_LOGCONFIG(TAG, "  Dither: %s (strength %.0f%%, error clamp %d)", this->get_dither_method_name(),
                 this->dither_strength_ * 100.0f, this->error_clamp_);
   ESP_LOGCONFIG(TAG, "  Saturation: %.0f%%, tone compression: %.0f%% (%s)", this->saturation_ * 100.0f,
-                this->tone_compression_ * 100.0f, this->tone_curve_ == TONE_SOFT ? "soft" : "linear");
+                this->tone_compression_ * 100.0f, this->get_tone_curve_name());
+  ESP_LOGCONFIG(TAG, "  Palette preset: %s", this->palette_preset_.c_str());
   ESP_LOGCONFIG(TAG, "  Auto-rotate: %s", YESNO(this->auto_rotate_));
   ESP_LOGCONFIG(TAG, "  Colour space: %s", this->color_space_ == CS_LAB ? "lab" : "rgb");
   for (int i = 0; i < 6; i++)
@@ -229,12 +329,26 @@ void EPaperGallery::loop() {
     this->free_buffers_();
   }
 
-  // 2) start the next render if one is pending and nothing is running
+  // 2) a setting changed a moment ago -> re-render the current image with it
+  if (this->rerender_at_ != 0 && (int32_t) (millis() - this->rerender_at_) >= 0) {
+    this->rerender_at_ = 0;
+    this->rerender();
+  }
+
+  // 3) start the next render if one is pending and nothing is running
   if (this->pending_.empty() || this->task_running_.load())
     return;
 
   this->task_file_ = this->pending_;
   this->pending_.clear();
+
+  // a newly shown image brings its own settings (or the defaults), a re-render keeps the current ones
+  if (!this->keep_settings_) {
+    const std::string base = this->root_path_ + "/";
+    if (this->load_settings_(base + this->task_file_ + ".cfg") || this->load_settings_(base + "_default.cfg"))
+      this->settings_loaded_cb_.call();
+  }
+  this->keep_settings_ = false;
 
   auto it = std::find(this->files_.begin(), this->files_.end(), this->task_file_);
   if (it != this->files_.end())
@@ -293,6 +407,7 @@ bool EPaperGallery::show(const std::string &filename) {
   if (filename.empty())
     return false;
   this->pending_ = filename;
+  this->keep_settings_ = false;
   return true;
 }
 

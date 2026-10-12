@@ -63,11 +63,32 @@ display:
           // your own stuff
 ```
 
+### Per-image settings
+
+Rendering settings (palette preset, dither, error clamp, strength, tone compression,
+tone curve, saturation) can be stored per photo in a small text file next to it:
+`<image>.cfg`, e.g. `wedding.jpg.cfg`. When an image is shown, its `.cfg` is loaded,
+otherwise `_default.cfg` (if present), otherwise the current settings stay.
+`save_settings(true)` writes the current settings for the image on screen,
+`save_settings(false)` writes `_default.cfg`. Changing a setter at runtime re-renders
+the current image (debounced), without reloading its file.
+
+```
+palette=aitjcize
+dither=floyd_steinberg
+error_clamp=255
+dither_strength=1.00
+tone_compression=1.00
+tone_curve=linear
+saturation=1.60
+```
+
 Lambda API: `show("file.jpg")`, `show_next()`, `show_previous()`,
 `refresh_list()`, `get_files()`, `get_current()`, `draw(it)`,
 `show_calibration_pattern()`, `set_palette_preset("aitjcize")`,
 `set_dither_method(...)`, `set_error_clamp(n)`, `set_dither_strength(f)`,
 `set_tone_compression(f)`, `set_tone_curve(...)`, `set_saturation(f)`,
+`save_settings(for_image)`, `rerender()`, `add_on_settings_loaded_callback(cb)`,
 `add_on_list_changed_callback(cb)`, `add_on_image_shown_callback(cb)`.
 
 ## Notes
