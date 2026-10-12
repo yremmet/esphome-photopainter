@@ -6,6 +6,7 @@
 
 #include "esphome/core/component.h"
 #include "esphome/core/helpers.h"
+#include "esphome/core/preferences.h"
 #include "esphome/components/display/display.h"
 
 namespace esphome {
@@ -60,6 +61,7 @@ class EPaperGallery : public Component {
   /// Re-scan root_path for *.jpg/*.jpeg/*.bmp and fire list-changed callbacks.
   void refresh_list();
   const std::vector<std::string> &get_files() const { return this->files_; }
+  /// Image currently on screen (survives reboots), "" if none yet
   std::string get_current() const;
 
   /// Schedule a file (name relative to root_path) for rendering.
@@ -108,7 +110,9 @@ class EPaperGallery : public Component {
   float match_lab_[6][3];     // same, in CIELAB (computed when rendering)
 
   std::vector<std::string> files_;
-  int current_index_{-1};
+  int current_index_{-1};     // navigation position for show_next/previous
+  std::string current_file_;  // image on screen (persisted), returned by get_current()
+  ESPPreferenceObject last_pref_;
   std::string pending_;
 
   // render task state

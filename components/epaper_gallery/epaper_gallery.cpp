@@ -14,6 +14,7 @@
 
 #include "esphome/core/application.h"
 #include "esphome/core/log.h"
+#include "esphome/core/preferences.h"
 
 namespace esphome {
 namespace epaper_gallery {
@@ -41,7 +42,19 @@ static const int16_t WAVESHARE_PALETTE[6][3] = {  // pure RGB, as in the Wavesha
 
 // ---------------------------------------------------------------- lifecycle
 
+struct LastImage {
+  char name[96];
+};
+
 void EPaperGallery::setup() {
+  // remember the last shown image across reboots: the e-paper keeps showing it,
+  // so get_current() / re-rendering after a settings change should know it too
+  this->last_pref_ = global_preferences->make_preference<LastImage>(fnv1_hash("epaper_gallery_last"));
+  LastImage last{};
+  if (this->last_pref_.load(&last)) {
+    last.name[sizeof(last.name) - 1] = '\0';
+    this->current_file_ = last.name;
+  }
   this->refresh_list();
 }
 
@@ -175,6 +188,10 @@ void EPaperGallery::loop() {
     if (this->task_ok_) {
       this->present_(this->idx_, this->dst_w_, this->dst_h_);
       this->idx_ = nullptr;  // now owned as shown_idx_
+      this->current_file_ = this->task_file_;
+      LastImage last{};
+      strncpy(last.name, this->current_file_.c_str(), sizeof(last.name) - 1);
+      this->last_pref_.save(&last);
       this->image_shown_cb_.call(this->task_file_);
     }
     this->free_buffers_();
@@ -232,15 +249,13 @@ void EPaperGallery::refresh_list() {
   }
   closedir(dir);
   std::sort(this->files_.begin(), this->files_.end());
+  auto cur = std::find(this->files_.begin(), this->files_.end(), this->current_file_);
+  this->current_index_ = cur != this->files_.end() ? cur - this->files_.begin() : -1;
   ESP_LOGI(TAG, "%u images in %s", (unsigned) this->files_.size(), this->root_path_.c_str());
   this->list_changed_cb_.call();
 }
 
-std::string EPaperGallery::get_current() const {
-  if (this->current_index_ < 0 || this->current_index_ >= (int) this->files_.size())
-    return "";
-  return this->files_[this->current_index_];
-}
+std::string EPaperGallery::get_current() const { return this->current_file_; }
 
 bool EPaperGallery::show(const std::string &filename) {
   if (filename.empty())

@@ -55,6 +55,9 @@ esphome:
               id(image_select).publish_state(f);
             });
             id(gallery).refresh_list();
+            // image remembered from before the reboot (still on the panel)
+            if (!id(gallery).get_current().empty())
+              id(image_select).publish_state(id(gallery).get_current());
 
 esp32:
   variant: esp32s3
