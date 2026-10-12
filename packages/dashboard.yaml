@@ -9,9 +9,10 @@
 #   rechts:  CO₂ als Halbkreis-Gauge mit Farbe nach Level + Bewertungswort
 #   unten:   Innenraum (Panel-Sensor), Datum, Update-Zeit, Akzentlinie
 #
-# Foto vs. Dashboard: "Show dashboard" schaltet auf die Dashboard-Page. Sobald
-# epaper_gallery ein Bild zeigt, verlässt es die Page selbst (show_page(nullptr)),
-# das Dashboard wird dann nicht mehr nachgezeichnet.
+# Foto vs. Dashboard: "Show dashboard" zeichnet die Übersicht direkt in den
+# Display-Buffer. Sobald epaper_gallery ein Bild zeigt, ist das Dashboard inaktiv
+# und wird nicht mehr nachgezeichnet. Voraussetzung: display `epd` ohne lambda/pages
+# und mit auto_clear_enabled: false (wie in photopainter.yaml).
 
 substitutions:
   weather_entity: weather.home
@@ -122,16 +123,20 @@ color:
     green: 0%
     blue: 100%
 
-# ---------------------------------------------------------------- display
-# Wird per id mit dem display-Block aus photopainter.yaml zusammengeführt, nur die Pages kommen dazu.
-display:
-  - id: epd
-    pages:
-      - id: page_photo   # erste Page = Start-Page; leer, den Buffer füllt epaper_gallery
-        lambda: |-
-          // leer
-      - id: page_dashboard
-        lambda: |-
+globals:
+  - id: dashboard_active
+    type: bool
+    initial_value: "false"
+
+script:
+  # Zeichnet direkt in den Buffer von epd (wie epaper_gallery) – keine Display-Pages nötig,
+  # der display-Block der Geräte-YAML bleibt unverändert.
+  - id: draw_dashboard_script
+    mode: queued
+    then:
+      - lambda: |-
+          id(dashboard_active) = true;
+          auto &it = *id(epd);
           const int W = it.get_width(), H = it.get_height();
           it.fill(id(c_white));
 
@@ -217,17 +222,6 @@ display:
                       DAYS[now.day_of_week - 1], now.day_of_month, MONTHS[now.month - 1]);
             it.printf(W - 48, base + 34, id(f_small), id(c_black), TextAlign::TOP_RIGHT, "Stand %02d:%02d", now.hour, now.minute);
           }
-
-globals:
-  - id: dashboard_active
-    type: bool
-    initial_value: "false"
-
-script:
-  - id: draw_dashboard_script
-    then:
-      - display.page.show: page_dashboard
-      - lambda: id(dashboard_active) = true;
       - component.update: epd
 
 button:
@@ -248,4 +242,4 @@ interval:
           condition:
             lambda: return id(dashboard_active);
           then:
-            - component.update: epd
+            - script.execute: draw_dashboard_script

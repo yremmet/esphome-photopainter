@@ -40,9 +40,16 @@ esphome:
       then:
         - lambda: |-
             id(gallery).add_on_list_changed_callback([]() {
-              auto files = id(gallery).get_files();
-              if (files.empty()) files.push_back("(no images)");
-              id(image_select).traits.set_options(files);
+              const auto &files = id(gallery).get_files();   // reference, not a copy!
+              FixedVector<const char *> opts;
+              if (files.empty()) {
+                opts.init(1);
+                opts.push_back("(no images)");
+              } else {
+                opts.init(files.size());
+                for (const auto &f : files) opts.push_back(f.c_str());
+              }
+              id(image_select).traits.set_options(opts);
             });
             id(gallery).add_on_image_shown_callback([](std::string f) {
               id(image_select).publish_state(f);
