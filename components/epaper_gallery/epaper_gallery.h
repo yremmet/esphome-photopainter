@@ -13,6 +13,7 @@ namespace epaper_gallery {
 
 enum ScaleMode { SCALE_FIT, SCALE_FILL };
 enum ColorSpace { CS_RGB, CS_LAB };
+enum DitherMethod { DITHER_NONE, DITHER_FLOYD_STEINBERG, DITHER_ATKINSON, DITHER_JJN };
 
 /**
  * Loads JPEG/BMP files from a mounted filesystem (SD card), scales them to the
@@ -29,11 +30,21 @@ class EPaperGallery : public Component {
   void set_display(display::Display *d) { this->display_ = d; }
   void set_root_path(const std::string &p) { this->root_path_ = p; }
   void set_scale_mode(ScaleMode m) { this->scale_mode_ = m; }
-  void set_dither(bool d) { this->dither_ = d; }
+  // Read at render start, so these can also be changed at runtime (e.g. from a
+  // template number/select) and take effect with the next image.
+  void set_dither_method(DitherMethod m) { this->dither_method_ = m; }
+  /// Max accumulated error per channel added to a pixel (0..255, 255 = no clamp)
+  void set_error_clamp(int c) { this->error_clamp_ = c; }
+  /// Fraction of the quantisation error that gets diffused (0..1)
+  void set_dither_strength(float s) { this->dither_strength_ = s; }
   void set_auto_rotate(bool r) { this->auto_rotate_ = r; }
   void set_color_space(ColorSpace cs) { this->color_space_ = cs; }
   /// Calibrated appearance of palette entry i (0 black, 1 white, 2 yellow, 3 red, 4 blue, 5 green)
   void set_match_color(int i, uint8_t r, uint8_t g, uint8_t b);
+  /// Switch the matching palette at runtime: "config" (YAML palette / built-in default),
+  /// "measured" (first calibration photo), "aitjcize" (esp32-photoframe), "waveshare" (pure RGB).
+  /// Takes effect with the next render. Returns false for an unknown name.
+  bool set_palette_preset(const std::string &name);
   /// Draw the six solid colour patches for calibration (call display update yourself afterwards)
   void draw_calibration_pattern();
 
@@ -77,11 +88,14 @@ class EPaperGallery : public Component {
   display::Display *display_{nullptr};
   std::string root_path_{"/sdcard/images"};
   ScaleMode scale_mode_{SCALE_FIT};
-  bool dither_{true};
+  DitherMethod dither_method_{DITHER_FLOYD_STEINBERG};
+  int error_clamp_{64};
+  float dither_strength_{1.0f};
   bool auto_rotate_{true};
   ColorSpace color_space_{CS_LAB};
   int16_t match_rgb_[6][3] = {{-1, -1, -1}, {-1, -1, -1}, {-1, -1, -1},
                               {-1, -1, -1}, {-1, -1, -1}, {-1, -1, -1}};  // -1 = use built-in default
+  int16_t config_rgb_[6][3];  // match_rgb_ after setup(), restored by preset "config"
   float match_lab_[6][3];     // same, in CIELAB (computed when rendering)
 
   std::vector<std::string> files_;

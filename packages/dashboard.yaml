@@ -1,0 +1,251 @@
+# PhotoPainter – Übersichtsseite (Wetter, Außentemperatur, CO₂ Wohnzimmer)
+#
+# Einbinden zusätzlich zu packages/photopainter.yaml (siehe example/photopainter.yaml).
+# HA-Entitäten über substitutions in der Geräte-YAML anpassen.
+#
+# Layout (800x480, kein Raster):
+#   links:   riesige Außentemperatur, darunter Ort + Zustand
+#   mitte:   grosses Wetter-Icon
+#   rechts:  CO₂ als Halbkreis-Gauge mit Farbe nach Level + Bewertungswort
+#   unten:   Innenraum (Panel-Sensor), Datum, Update-Zeit, Akzentlinie
+#
+# Foto vs. Dashboard: "Show dashboard" schaltet auf die Dashboard-Page. Sobald
+# epaper_gallery ein Bild zeigt, verlässt es die Page selbst (show_page(nullptr)),
+# das Dashboard wird dann nicht mehr nachgezeichnet.
+
+substitutions:
+  weather_entity: weather.home
+  co2_entity: sensor.wohnzimmer_co2
+  outdoor_temp_entity: sensor.aussen_temperatur   # optional; sonst Attribut aus weather_entity
+  dashboard_place: Wiesbaden
+
+esphome:
+  on_boot:
+    - priority: -200
+      then:
+        - lambda: |-
+            id(gallery).add_on_image_shown_callback([](std::string) { id(dashboard_active) = false; });
+
+# ---------------------------------------------------------------- daten aus HA
+sensor:
+  - platform: homeassistant
+    id: ha_outdoor_temp
+    entity_id: ${outdoor_temp_entity}
+    internal: true
+  - platform: homeassistant
+    id: ha_weather_temp
+    entity_id: ${weather_entity}
+    attribute: temperature   # Fallback, falls kein eigener Außensensor
+    internal: true
+  - platform: homeassistant
+    id: ha_co2
+    entity_id: ${co2_entity}
+    internal: true
+
+text_sensor:
+  - platform: homeassistant
+    id: ha_weather_state
+    entity_id: ${weather_entity}
+    internal: true
+
+time:
+  - platform: homeassistant
+    id: ha_time
+
+# ---------------------------------------------------------------- fonts & farben
+font:
+  - file: "gfonts://Inter@800"
+    id: f_hero
+    size: 170
+    glyphs: "0123456789-°"
+  - file: "gfonts://Inter@600"
+    id: f_h1
+    size: 44
+    glyphs: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789äöüÄÖÜß .,:-°/%"
+  - file: "gfonts://Inter@500"
+    id: f_body
+    size: 28
+    glyphs: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789äöüÄÖÜß .,:-°/%₂"
+  - file: "gfonts://Inter@500"
+    id: f_small
+    size: 20
+    glyphs: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789äöüÄÖÜß .,:-°/%₂·"
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: f_icon_xl
+    size: 200
+    glyphs:
+      - "\U000F0599"  # weather-sunny
+      - "\U000F0594"  # weather-night
+      - "\U000F0590"  # weather-cloudy
+      - "\U000F0595"  # weather-partly-cloudy
+      - "\U000F0591"  # weather-fog
+      - "\U000F0597"  # weather-rainy
+      - "\U000F0596"  # weather-pouring
+      - "\U000F0598"  # weather-snowy
+      - "\U000F067F"  # weather-snowy-rainy
+      - "\U000F0593"  # weather-lightning
+      - "\U000F067E"  # weather-lightning-rainy
+      - "\U000F0592"  # weather-hail
+      - "\U000F059D"  # weather-windy
+      - "\U000F059E"  # weather-windy-variant
+  - file: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
+    id: f_icon_s
+    size: 30
+    glyphs:
+      - "\U000F050F"  # thermometer
+      - "\U000F058E"  # water-percent
+      - "\U000F07E4"  # molecule-co2
+
+color:
+  - id: c_black
+    red: 0%
+    green: 0%
+    blue: 0%
+  - id: c_white
+    red: 100%
+    green: 100%
+    blue: 100%
+  - id: c_red
+    red: 100%
+    green: 0%
+    blue: 0%
+  - id: c_yellow
+    red: 100%
+    green: 100%
+    blue: 0%
+  - id: c_green
+    red: 0%
+    green: 100%
+    blue: 0%
+  - id: c_blue
+    red: 0%
+    green: 0%
+    blue: 100%
+
+# ---------------------------------------------------------------- display
+# Wird per id mit dem display-Block aus photopainter.yaml zusammengeführt, nur die Pages kommen dazu.
+display:
+  - id: epd
+    pages:
+      - id: page_photo   # erste Page = Start-Page; leer, den Buffer füllt epaper_gallery
+        lambda: |-
+          // leer
+      - id: page_dashboard
+        lambda: |-
+          const int W = it.get_width(), H = it.get_height();
+          it.fill(id(c_white));
+
+          // ---------- Werte
+          float t_out = id(ha_outdoor_temp).state;
+          if (std::isnan(t_out)) t_out = id(ha_weather_temp).state;
+          const float co2 = id(ha_co2).state;
+          std::string state = id(ha_weather_state).state;
+
+          // ---------- Wetter-Icon + Text
+          const char *icon = "\U000F0590"; const char *label = "bewölkt"; Color icon_col = id(c_black);
+          if (state == "sunny")                 { icon = "\U000F0599"; label = "sonnig";          icon_col = id(c_yellow); }
+          else if (state == "clear-night")      { icon = "\U000F0594"; label = "klar";            icon_col = id(c_blue); }
+          else if (state == "partlycloudy")     { icon = "\U000F0595"; label = "teils bewölkt";   icon_col = id(c_black); }
+          else if (state == "cloudy")           { icon = "\U000F0590"; label = "bewölkt"; }
+          else if (state == "fog")              { icon = "\U000F0591"; label = "Nebel"; }
+          else if (state == "rainy")            { icon = "\U000F0597"; label = "Regen";           icon_col = id(c_blue); }
+          else if (state == "pouring")          { icon = "\U000F0596"; label = "Starkregen";      icon_col = id(c_blue); }
+          else if (state == "snowy")            { icon = "\U000F0598"; label = "Schnee";          icon_col = id(c_blue); }
+          else if (state == "snowy-rainy")      { icon = "\U000F067F"; label = "Schneeregen";     icon_col = id(c_blue); }
+          else if (state == "lightning")        { icon = "\U000F0593"; label = "Gewitter";        icon_col = id(c_yellow); }
+          else if (state == "lightning-rainy")  { icon = "\U000F067E"; label = "Gewitter, Regen"; icon_col = id(c_yellow); }
+          else if (state == "hail")             { icon = "\U000F0592"; label = "Hagel";           icon_col = id(c_blue); }
+          else if (state == "windy" || state == "windy-variant") { icon = "\U000F059D"; label = "windig"; }
+
+          // ---------- links: Hero-Temperatur, asymmetrisch gesetzt
+          const int hero_x = 48, hero_y = 60;
+          if (!std::isnan(t_out)) {
+            it.printf(hero_x, hero_y, id(f_hero), id(c_black), TextAlign::TOP_LEFT, "%.0f°", t_out);
+          } else {
+            it.print(hero_x, hero_y + 60, id(f_h1), id(c_black), TextAlign::TOP_LEFT, "--°");
+          }
+          it.print(hero_x + 6, hero_y + 192, id(f_h1), id(c_black), TextAlign::TOP_LEFT, "${dashboard_place}");
+          it.print(hero_x + 6, hero_y + 244, id(f_body), id(c_black), TextAlign::TOP_LEFT, label);
+
+          // Icon: gross, ueberlappt leicht mit der Zahl – wirkt wie ein Magazin-Layout
+          it.print(430, 36, id(f_icon_xl), icon_col, TextAlign::TOP_LEFT, icon);
+
+          // ---------- rechts: CO2 als Halbkreis-Gauge
+          const int cx = 655, cy = 300, R = 105;
+          float frac = 0.0f; Color lvl = id(c_green); const char *verdict = "gut";
+          if (!std::isnan(co2)) {
+            frac = (co2 - 400.0f) / 1600.0f;
+            if (frac < 0) frac = 0;
+            if (frac > 1) frac = 1;
+            if (co2 >= 1200)      { lvl = id(c_red);    verdict = "lüften"; }
+            else if (co2 >= 800)  { lvl = id(c_yellow); verdict = "okay"; }
+          }
+          // Track: duenner schwarzer Bogen von 180° bis 0°
+          for (int a = 180; a >= 0; a--) {
+            const float r = a * M_PI / 180.0f;
+            it.filled_circle(cx + (int) (R * cosf(r)), cy - (int) (R * sinf(r)), 3, id(c_black));
+          }
+          // Fuellung: dicker farbiger Bogen
+          const int a_end = 180 - (int) (180 * frac);
+          for (int a = 180; a >= a_end; a--) {
+            const float r = a * M_PI / 180.0f;
+            it.filled_circle(cx + (int) (R * cosf(r)), cy - (int) (R * sinf(r)), 11, lvl);
+          }
+          // Endkappe in Schwarz als Zeiger
+          { const float r = a_end * M_PI / 180.0f;
+            it.filled_circle(cx + (int) (R * cosf(r)), cy - (int) (R * sinf(r)), 11, id(c_black)); }
+          if (!std::isnan(co2))
+            it.printf(cx, cy - 14, id(f_h1), id(c_black), TextAlign::BOTTOM_CENTER, "%.0f", co2);
+          else
+            it.print(cx, cy - 14, id(f_h1), id(c_black), TextAlign::BOTTOM_CENTER, "--");
+          it.print(cx, cy - 8, id(f_small), id(c_black), TextAlign::TOP_CENTER, "ppm CO₂ · Wohnzimmer");
+          it.print(cx, cy + 40, id(f_body), lvl == id(c_yellow) ? id(c_black) : lvl, TextAlign::TOP_CENTER, verdict);
+
+          // ---------- unten: Innenraum + Datum + Akzentlinie
+          const int base = H - 58;
+          it.filled_rectangle(hero_x, base - 22, 230, 4, id(c_blue));   // kurze Akzentlinie, nicht volle Breite
+          it.print(hero_x, base, id(f_icon_s), id(c_black), TextAlign::TOP_LEFT, "\U000F050F");
+          it.printf(hero_x + 36, base + 2, id(f_body), id(c_black), TextAlign::TOP_LEFT, "%.1f°", id(shtc_temp).state);
+          it.print(hero_x + 150, base, id(f_icon_s), id(c_black), TextAlign::TOP_LEFT, "\U000F058E");
+          it.printf(hero_x + 186, base + 2, id(f_body), id(c_black), TextAlign::TOP_LEFT, "%.0f %%", id(shtc_hum).state);
+
+          static const char *DAYS[] = {"Sonntag","Montag","Dienstag","Mittwoch","Donnerstag","Freitag","Samstag"};
+          static const char *MONTHS[] = {"Januar","Februar","März","April","Mai","Juni","Juli","August","September","Oktober","November","Dezember"};
+          auto now = id(ha_time).now();
+          if (now.is_valid()) {
+            it.printf(W - 48, base + 2, id(f_body), id(c_black), TextAlign::TOP_RIGHT, "%s, %d. %s",
+                      DAYS[now.day_of_week - 1], now.day_of_month, MONTHS[now.month - 1]);
+            it.printf(W - 48, base + 34, id(f_small), id(c_black), TextAlign::TOP_RIGHT, "Stand %02d:%02d", now.hour, now.minute);
+          }
+
+globals:
+  - id: dashboard_active
+    type: bool
+    initial_value: "false"
+
+script:
+  - id: draw_dashboard_script
+    then:
+      - display.page.show: page_dashboard
+      - lambda: id(dashboard_active) = true;
+      - component.update: epd
+
+button:
+  - platform: template
+    name: Show dashboard
+    icon: mdi:view-dashboard-outline
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 25
+    on_press:
+      - script.execute: draw_dashboard_script
+
+# Dashboard alle 30 min nachzeichnen, solange es aktiv ist (E-Paper-Refresh dauert ~25 s)
+interval:
+  - interval: 30min
+    then:
+      - if:
+          condition:
+            lambda: return id(dashboard_active);
+          then:
+            - component.update: epd

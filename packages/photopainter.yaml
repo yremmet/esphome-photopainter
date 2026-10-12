@@ -93,6 +93,10 @@ captive_portal:
 web_server:
   port: 80
   version: 3
+  sorting_groups:
+    - id: gallery_group
+      name: E-Paper Gallery
+      sorting_weight: 10   # above "Sensor and Control"
 
 # ---------------------------------------------------------------- BLE proxy
 esp32_ble_tracker:
@@ -165,33 +169,124 @@ epaper_gallery:
   display_id: epd
   root_path: /sdcard/images   # mount point of sd_mmc_card + sub folder
   scale: fit                  # fit = white borders, fill = centered crop
-  dither: true
   auto_rotate: true
+  # dither / error_clamp / dither_strength / palette preset are set from the
+  # web UI entities below (restored across reboots); YAML `palette:` = preset "config"
+
+script:
+  # re-render the current image so a changed setting is visible right away
+  - id: rerender
+    mode: restart
+    then:
+      - delay: 500ms   # coalesce quick slider changes
+      - lambda: |-
+          auto cur = id(gallery).get_current();
+          if (!cur.empty()) id(gallery).show(cur);
 
 select:
   - platform: template
     id: image_select
     name: Image
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 10
     icon: mdi:image
     optimistic: true
     options: ["(no images)"]
     set_action:
       - lambda: |-
           if (x != "(no images)") id(gallery).show(x);
+  - platform: template
+    id: palette_select
+    name: Palette
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 40
+    icon: mdi:palette
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    options: [config, measured, aitjcize, waveshare]
+    initial_option: config
+    on_value:
+      - lambda: id(gallery).set_palette_preset(x);
+      - script.execute: rerender
+  - platform: template
+    id: dither_select
+    name: Dither method
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 41
+    icon: mdi:dots-grid
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    # order must match epaper_gallery::DitherMethod
+    options: [none, floyd_steinberg, atkinson, jarvis_judice_ninke]
+    initial_option: floyd_steinberg
+    on_value:
+      - lambda: id(gallery).set_dither_method((epaper_gallery::DitherMethod) i);
+      - script.execute: rerender
+
+number:
+  - platform: template
+    id: error_clamp_number
+    name: Dither error clamp
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 42
+    icon: mdi:arrow-collapse-vertical
+    entity_category: config
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 255
+    step: 1
+    initial_value: 64
+    on_value:
+      - lambda: id(gallery).set_error_clamp((int) x);
+      - script.execute: rerender
+  - platform: template
+    id: dither_strength_number
+    name: Dither strength
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 43
+    icon: mdi:percent
+    entity_category: config
+    unit_of_measurement: "%"
+    optimistic: true
+    restore_value: true
+    min_value: 0
+    max_value: 100
+    step: 5
+    initial_value: 100
+    on_value:
+      - lambda: id(gallery).set_dither_strength(x / 100.0f);
+      - script.execute: rerender
 
 button:
   - platform: template
     name: Refresh image list
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 30
     icon: mdi:refresh
     on_press:
       - lambda: id(gallery).refresh_list();
   - platform: template
     name: Next image
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 20
     icon: mdi:skip-next
     on_press:
       - lambda: id(gallery).show_next();
   - platform: template
     name: Previous image
+    web_server:
+      sorting_group_id: gallery_group
+      sorting_weight: 21
     icon: mdi:skip-previous
     on_press:
       - lambda: id(gallery).show_previous();
@@ -207,8 +302,10 @@ sensor:
   - platform: shtcx
     i2c_id: pmic_i2c
     temperature:
+      id: shtc_temp
       name: Temperature
     humidity:
+      id: shtc_hum
       name: Humidity
     update_interval: 5min
   - platform: wifi_signal

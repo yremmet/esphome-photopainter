@@ -50,7 +50,7 @@ static constexpr uint32_t RENDER_TASK_STACK = 12 * 1024;
 // (the main loop is, our render task is not).
 static inline void feed_wdt_safe() {
   if (esp_task_wdt_status(nullptr) == ESP_OK)
-    feed_wdt_safe();
+    esp_task_wdt_reset();
 }
 
 static void render_task_entry(void *arg) {
@@ -73,6 +73,14 @@ static bool ends_with(const std::string &s, const char *suffix) {
   return s.size() >= n && s.compare(s.size() - n, n, suffix) == 0;
 }
 
+// Runtime-selectable palettes, same order as above
+static const int16_t MEASURED_PALETTE[6][3] = {  // first calibration photo, glare-affected
+    {45, 30, 31}, {176, 176, 176}, {196, 176, 49}, {96, 20, 14}, {43, 56, 133}, {56, 72, 57}};
+static const int16_t AITJCIZE_PALETTE[6][3] = {  // "perceived" Spectra 6, aitjcize/epaper-image-convert
+    {2, 2, 2}, {190, 190, 190}, {205, 202, 0}, {135, 19, 0}, {5, 64, 158}, {39, 102, 60}};
+static const int16_t WAVESHARE_PALETTE[6][3] = {  // pure RGB, as in the Waveshare demo firmware
+    {0, 0, 0}, {255, 255, 255}, {255, 255, 0}, {255, 0, 0}, {0, 0, 255}, {0, 255, 0}};
+
 // ---------------------------------------------------------------- lifecycle
 
 void EPaperGallery::setup() {
@@ -83,6 +91,7 @@ void EPaperGallery::setup() {
         this->match_rgb_[i][c] = DEFAULT_MATCH_PALETTE[i][c];
     }
   }
+  memcpy(this->config_rgb_, this->match_rgb_, sizeof(this->config_rgb_));
   this->refresh_list();
 }
 
@@ -94,7 +103,27 @@ void EPaperGallery::set_match_color(int i, uint8_t r, uint8_t g, uint8_t b) {
   this->match_rgb_[i][2] = b;
 }
 
+bool EPaperGallery::set_palette_preset(const std::string &name) {
+  const int16_t(*src)[3];
+  if (name == "config") {
+    src = this->config_rgb_;
+  } else if (name == "measured") {
+    src = MEASURED_PALETTE;
+  } else if (name == "aitjcize") {
+    src = AITJCIZE_PALETTE;
+  } else if (name == "waveshare") {
+    src = WAVESHARE_PALETTE;
+  } else {
+    ESP_LOGW(TAG, "Unknown palette preset '%s'", name.c_str());
+    return false;
+  }
+  memcpy(this->match_rgb_, src, sizeof(this->match_rgb_));
+  ESP_LOGI(TAG, "Palette preset: %s", name.c_str());
+  return true;
+}
+
 void EPaperGallery::draw_calibration_pattern() {
+  this->display_->show_page(nullptr);  // see blit_and_update_()
   const int w = this->display_->get_width(), h = this->display_->get_height();
   const int cols = 3, rows = 2;
   const int pw = w / cols, ph = h / rows;
@@ -171,7 +200,9 @@ void EPaperGallery::dump_config() {
   ESP_LOGCONFIG(TAG, "E-Paper Gallery:");
   ESP_LOGCONFIG(TAG, "  Root path: %s", this->root_path_.c_str());
   ESP_LOGCONFIG(TAG, "  Scale: %s", this->scale_mode_ == SCALE_FILL ? "fill" : "fit");
-  ESP_LOGCONFIG(TAG, "  Dither: %s", YESNO(this->dither_));
+  static const char *const DITHER_NAMES[] = {"none", "floyd_steinberg", "atkinson", "jarvis_judice_ninke"};
+  ESP_LOGCONFIG(TAG, "  Dither: %s (strength %.0f%%, error clamp %d)", DITHER_NAMES[this->dither_method_],
+                this->dither_strength_ * 100.0f, this->error_clamp_);
   ESP_LOGCONFIG(TAG, "  Auto-rotate: %s", YESNO(this->auto_rotate_));
   ESP_LOGCONFIG(TAG, "  Colour space: %s", this->color_space_ == CS_LAB ? "lab" : "rgb");
   for (int i = 0; i < 6; i++)
@@ -372,7 +403,9 @@ void EPaperGallery::blit_and_update_() {
   }
   ESP_LOGI(TAG, "Blitted in %u ms, triggering display update", (unsigned) (millis() - t0));
   // display must have auto_clear_enabled: false and no lambda, otherwise the
-  // buffer we just filled would be wiped here.
+  // buffer we just filled would be wiped here. If the display has pages (e.g. a
+  // dashboard), drop the active page so update() doesn't draw it over the photo.
+  this->display_->show_page(nullptr);
   this->display_->update();
 }
 
@@ -560,6 +593,16 @@ void EPaperGallery::resample_() {
 
 // ---------------------------------------------------------------- dither
 
+// Error diffusion kernels: (dx, dy, weight), weights sum to <= div.
+// dx is mirrored on odd rows (serpentine scan).
+struct DitherTap {
+  int8_t dx, dy, w;
+};
+static const DitherTap FS_TAPS[] = {{1, 0, 7}, {-1, 1, 3}, {0, 1, 5}, {1, 1, 1}};
+static const DitherTap ATKINSON_TAPS[] = {{1, 0, 1}, {2, 0, 1}, {-1, 1, 1}, {0, 1, 1}, {1, 1, 1}, {0, 2, 1}};
+static const DitherTap JJN_TAPS[] = {{1, 0, 7},  {2, 0, 5},  {-2, 1, 3}, {-1, 1, 5}, {0, 1, 7}, {1, 1, 5},
+                                     {2, 1, 3},  {-2, 2, 1}, {-1, 2, 3}, {0, 2, 5},  {1, 2, 3}, {2, 2, 1}};
+
 void EPaperGallery::quantize_() {
   const int w = this->dst_w_;
   const int h = this->dst_h_;
@@ -570,9 +613,29 @@ void EPaperGallery::quantize_() {
   }
   this->prepare_palette_();
 
-  // error buffers for the current and next row, index (x+1) to allow x-1/x+1 without bounds checks
-  std::vector<int16_t> err_cur((w + 2) * 3, 0);
-  std::vector<int16_t> err_next((w + 2) * 3, 0);
+  // snapshot settings: they may be changed from the main loop while we run
+  const DitherTap *taps = nullptr;
+  int n_taps = 0, div = 1;
+  switch (this->dither_method_) {
+    case DITHER_FLOYD_STEINBERG:
+      taps = FS_TAPS, n_taps = 4, div = 16;
+      break;
+    case DITHER_ATKINSON:
+      taps = ATKINSON_TAPS, n_taps = 6, div = 8;
+      break;
+    case DITHER_JJN:
+      taps = JJN_TAPS, n_taps = 12, div = 48;
+      break;
+    default:
+      break;
+  }
+  const int clamp = this->error_clamp_;
+  const int strength = (int) (this->dither_strength_ * 256.0f);  // 8.8 fixed point
+
+  // three error rows (current + 2 ahead), 2 px padding each side so x±2 needs no bounds checks
+  const int stride = (w + 4) * 3;
+  std::vector<int16_t> err(stride * 3, 0);
+  int16_t *rows[3] = {&err[0], &err[stride], &err[stride * 2]};
 
   for (int y = 0; y < h; y++) {
     const bool reverse = (y & 1) != 0;  // serpentine scan reduces visible patterns
@@ -581,31 +644,34 @@ void EPaperGallery::quantize_() {
     for (int i = 0; i < w; i++) {
       const int x = reverse ? (w - 1 - i) : i;
       const uint8_t *p = this->dst_ + ((size_t) y * w + x) * 3;
-      int16_t *ec = &err_cur[(x + 1) * 3];
+      const int16_t *ec = &rows[0][(x + 2) * 3];
 
       int v[3];
       for (int c = 0; c < 3; c++) {
-        int t = p[c] + (this->dither_ ? ec[c] : 0);
+        // clamp accumulated error: the sparse 6-colour gamut otherwise lets error
+        // pile up in flat areas and bleed out as colour streaks
+        const int e = ec[c] < -clamp ? -clamp : (ec[c] > clamp ? clamp : ec[c]);
+        const int t = p[c] + e;
         v[c] = t < 0 ? 0 : (t > 255 ? 255 : t);
       }
 
       const int best = this->nearest_(v);
       this->idx_[(size_t) y * w + x] = (uint8_t) best;
 
-      if (!this->dither_)
-        continue;
-
-      // Floyd–Steinberg: 7/16 right, 3/16 below-left, 5/16 below, 1/16 below-right
       for (int c = 0; c < 3; c++) {
-        int e = v[c] - this->match_rgb_[best][c];
-        err_cur[(x + 1 + dir) * 3 + c] += (e * 7) / 16;
-        err_next[(x + 1 - dir) * 3 + c] += (e * 3) / 16;
-        err_next[(x + 1) * 3 + c] += (e * 5) / 16;
-        err_next[(x + 1 + dir) * 3 + c] += (e * 1) / 16;
+        const int e = ((v[c] - this->match_rgb_[best][c]) * strength) >> 8;
+        for (int k = 0; k < n_taps; k++) {
+          const DitherTap &t = taps[k];
+          rows[t.dy][(x + 2 + t.dx * dir) * 3 + c] += (e * t.w) / div;
+        }
       }
     }
-    std::swap(err_cur, err_next);
-    std::fill(err_next.begin(), err_next.end(), 0);
+    // rotate rows, clear the new last one
+    int16_t *done = rows[0];
+    rows[0] = rows[1];
+    rows[1] = rows[2];
+    rows[2] = done;
+    std::fill(done, done + stride, 0);
     if ((y & 15) == 0)
       feed_wdt_safe();
   }

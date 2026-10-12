@@ -18,6 +18,8 @@ CONF_DITHER = "dither"
 CONF_AUTO_ROTATE = "auto_rotate"
 CONF_COLOR_SPACE = "color_space"
 CONF_PALETTE = "palette"
+CONF_ERROR_CLAMP = "error_clamp"
+CONF_DITHER_STRENGTH = "dither_strength"
 
 ns = cg.esphome_ns.namespace("epaper_gallery")
 EPaperGallery = ns.class_("EPaperGallery", cg.Component)
@@ -31,6 +33,22 @@ COLOR_SPACES = {
     "rgb": ColorSpace.CS_RGB,  # plain euclidean distance in RGB
     "lab": ColorSpace.CS_LAB,  # perceptual CIELAB distance (recommended)
 }
+
+DitherMethod = ns.enum("DitherMethod")
+DITHER_METHODS = {
+    "none": DitherMethod.DITHER_NONE,
+    "floyd_steinberg": DitherMethod.DITHER_FLOYD_STEINBERG,
+    "atkinson": DitherMethod.DITHER_ATKINSON,  # only diffuses 3/4 of the error: more contrast, less noise
+    "jarvis_judice_ninke": DitherMethod.DITHER_JJN,  # wider kernel: smoother, less wormy
+}
+
+
+def _dither(value):
+    # keep `dither: true/false` working
+    if isinstance(value, bool):
+        value = "floyd_steinberg" if value else "none"
+    return cv.enum(DITHER_METHODS, lower=True)(value)
+
 
 # Calibrated panel colours, order fixed: black, white, yellow, red, blue, green
 PALETTE_ORDER = ["black", "white", "yellow", "red", "blue", "green"]
@@ -54,7 +72,9 @@ CONFIG_SCHEMA = cv.Schema(
         cv.Required(CONF_DISPLAY_ID): cv.use_id(display.Display),
         cv.Optional(CONF_ROOT_PATH, default="/sdcard/images"): cv.string,
         cv.Optional(CONF_SCALE, default="fit"): cv.enum(SCALE_MODES, lower=True),
-        cv.Optional(CONF_DITHER, default=True): cv.boolean,
+        cv.Optional(CONF_DITHER, default="floyd_steinberg"): _dither,
+        cv.Optional(CONF_ERROR_CLAMP, default=64): cv.int_range(min=0, max=255),
+        cv.Optional(CONF_DITHER_STRENGTH, default="100%"): cv.percentage,
         cv.Optional(CONF_AUTO_ROTATE, default=True): cv.boolean,
         cv.Optional(CONF_COLOR_SPACE, default="lab"): cv.enum(COLOR_SPACES, lower=True),
         cv.Optional(CONF_PALETTE): PALETTE_SCHEMA,
@@ -69,7 +89,9 @@ async def to_code(config):
     cg.add(var.set_display(disp))
     cg.add(var.set_root_path(config[CONF_ROOT_PATH]))
     cg.add(var.set_scale_mode(config[CONF_SCALE]))
-    cg.add(var.set_dither(config[CONF_DITHER]))
+    cg.add(var.set_dither_method(config[CONF_DITHER]))
+    cg.add(var.set_error_clamp(config[CONF_ERROR_CLAMP]))
+    cg.add(var.set_dither_strength(config[CONF_DITHER_STRENGTH]))
     cg.add(var.set_auto_rotate(config[CONF_AUTO_ROTATE]))
     cg.add(var.set_color_space(config[CONF_COLOR_SPACE]))
     if CONF_PALETTE in config:
