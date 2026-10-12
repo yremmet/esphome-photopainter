@@ -91,6 +91,20 @@ Lambda API: `show("file.jpg")`, `show_next()`, `show_previous()`,
 `save_settings(for_image)`, `rerender()`, `add_on_settings_loaded_callback(cb)`,
 `add_on_list_changed_callback(cb)`, `add_on_image_shown_callback(cb)`.
 
+## Dithering on your computer
+
+`tools/predither.sh` runs [epaper-image-convert](https://github.com/aitjcize/esp32-photoframe)
+(S-curve tone mapping, Stucki/Sierra/Burkes, LAB matching) and writes panel-sized BMPs
+plus a `<file>.bmp.cfg` (palette `waveshare`, dither `none`), so the device shows them 1:1:
+
+```bash
+npm install -g epaper-image-convert
+tools/predither.sh ~/Pictures/wedding -o ~/Pictures/epaper
+tools/predither.sh photo.jpg -o out -- -p dynamic --dither-algorithm floyd-steinberg
+```
+
+Upload the `.bmp` together with its `.bmp.cfg`.
+
 ## Notes
 
 - Requires ESP-IDF framework and PSRAM (octal).
