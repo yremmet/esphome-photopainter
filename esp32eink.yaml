@@ -284,11 +284,14 @@ script:
       - micro_wake_word.start:
 
   # Wellen-Animation auf der Uhr-Seite (Partial Refreshes):
-  # am Netz dauerhaft, im Akkubetrieb 10 Frames (gestartet alle 3 min, siehe time.on_time)
+  # am Netz dauerhaft, im Akkubetrieb 10 Frames (gestartet alle 3 min, siehe time.on_time).
+  # Die ersten 30 s so schnell das Panel kann (~1-1,5 fps), danach 1 Frame alle 2 s.
   - id: anim_burst
     mode: restart
     then:
-      - lambda: 'id(anim_left) = 10;'
+      - lambda: |-
+          id(anim_left) = 10;
+          id(anim_start) = millis();
       - while:
           condition:
             and:
@@ -302,12 +305,16 @@ script:
             - lambda: |-
                 id(anim_frame) += 1;
                 id(anim_left) -= 1;
+                id(anim_frame_start) = millis();
             - component.update: my_display
             - wait_until: # jeden Frame fertig zeigen, bevor der nächste kommt
                 condition:
                   lambda: 'return !id(my_display).is_refreshing();'
                 timeout: 3s
-            - delay: 400ms
+            - delay: !lambda |-
+                uint32_t period = millis() - id(anim_start) < 30000 ? 0 : 2000;  // ms pro Frame
+                uint32_t took = millis() - id(anim_frame_start);
+                return took < period ? period - took : 0;
 
 # ---------- Display ----------
 external_components:
@@ -810,6 +817,12 @@ globals:
     initial_value: '0'
   - id: anim_left # restliche Frames im Akkubetrieb
     type: int
+    initial_value: '0'
+  - id: anim_start # Start der Animation (millis), für die schnelle Anfangsphase
+    type: uint32_t
+    initial_value: '0'
+  - id: anim_frame_start
+    type: uint32_t
     initial_value: '0'
   - id: ds_disabled # überlebt Schlafzyklen, damit OTA im Akkubetrieb möglich ist
     type: bool
