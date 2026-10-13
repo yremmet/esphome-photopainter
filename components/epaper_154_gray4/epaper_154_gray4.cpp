@@ -40,6 +40,23 @@ static const uint8_t LUT_4GRAY[159] = {
 };
 static const size_t LUT_4GRAY_SEND = 153;
 
+// Gray pulse for partial updates, derived from LUT_4GRAY without new values: groups 0-1 of LUT_4GRAY shake
+// every pixel to white (that is the full-panel flash), group 2 then turns white into the gray levels with
+// a VSH1 pulse: light gray 3 frames (phase B), dark gray 8 frames (phase C). This LUT is only that group 2:
+// light/dark rows as in LUT_4GRAY, white/black rows emptied (VSS = not driven), the then unused phases A/D
+// set to 0 frames (= skipped, datasheet 6.6), FR/XON bytes as in LUT_4GRAY. Step 1 of the partial update
+// has put the pixels to white before, like groups 0-1 do.
+static uint8_t lut_pulse[LUT_4GRAY_SEND];
+static void build_lut_pulse() {
+  const size_t vs = 12, tp = 60, tp_row = 7, group = 2;
+  memset(lut_pulse, 0, sizeof(lut_pulse));
+  lut_pulse[1 * vs + 0] = LUT_4GRAY[1 * vs + group];                // L1 light gray: VSH1 in phase B
+  lut_pulse[2 * vs + 0] = LUT_4GRAY[2 * vs + group];                // L2 dark gray:  VSH1 in phase C
+  lut_pulse[tp + 1] = LUT_4GRAY[tp + group * tp_row + 1];           // TP B = 3 frames
+  lut_pulse[tp + 3] = LUT_4GRAY[tp + group * tp_row + 3];           // TP C = 8 frames
+  memcpy(lut_pulse + 144, LUT_4GRAY + 144, LUT_4GRAY_SEND - 144);  // FR, XON
+}
+
 // Busy timeouts. Partial: waveshare_epaper's value for this panel. Gray: generous, the 4-gray
 // waveform runs longer than the OTP full refresh.
 static const uint32_t TIMEOUT_PARTIAL_MS = 2500;
@@ -54,6 +71,7 @@ void EPaper154Gray4::setup() {
     return;
   }
   memset(this->shown_, 0x00, BUFFER_LEN);  // white
+  build_lut_pulse();
 
   this->dc_pin_->setup();
   this->dc_pin_->digital_write(false);
@@ -83,41 +101,41 @@ void EPaper154Gray4::update() {
   if (gray) {
     this->send_gray_();
     memcpy(this->shown_, this->buffer_, BUFFER_LEN);
-    this->shown_gray_ = true;
     this->cleanup_done_ = 0;
-    this->start_wait_(true);
+    this->start_wait_("Gray", TIMEOUT_GRAY_MS);
   } else {
     this->start_partial_();
   }
 }
 
-// After a gray refresh, the first `cleanup_passes` partial updates drive every formerly gray pixel
-// (see old_byte()); the same frame is sent again until all passes are done.
+// Step 1 of a partial update. If formerly gray pixels change, it runs `cleanup_passes` times (each pass
+// drives them again); then step 2 (gray pulse) follows if any pixel becomes gray.
 void EPaper154Gray4::start_partial_() {
-  this->send_partial_();
-  if (this->shown_gray_ && ++this->cleanup_done_ < this->cleanup_passes_) {
-    this->repeat_ = true;
-  } else {
-    // The panel now shows the frame in black/white
-    for (size_t i = 0; i < BUFFER_LEN; i++) {
-      uint8_t b = this->buffer_[i], out = 0;
-      for (int shift = 6; shift >= 0; shift -= 2)
-        out |= (((b >> shift) & 2) ? 3 : 0) << shift;
-      this->shown_[i] = out;
-    }
-    this->shown_gray_ = false;
-    this->cleanup_done_ = 0;
+  bool forced = false, pulse = false;
+  for (size_t i = 0; i < BUFFER_LEN; i += 2) {
+    const PartialBytes p = partial_bytes(this->shown_ + i, this->buffer_ + i);
+    forced |= p.forced;
+    pulse |= p.pulse;
   }
-  this->start_wait_(false);
+  this->send_partial_();
+  this->repeat_ = forced && ++this->cleanup_done_ < this->cleanup_passes_;
+  if (!this->repeat_)
+    this->cleanup_done_ = 0;
+  this->pulse_next_ = !this->repeat_ && pulse;
+  if (!this->repeat_ && !pulse)
+    this->finish_partial_();
+  this->start_wait_("Partial", TIMEOUT_PARTIAL_MS);
 }
 
-void EPaper154Gray4::start_wait_(bool gray) {
-  this->refresh_gray_ = gray;
+void EPaper154Gray4::finish_partial_() { memcpy(this->shown_, this->buffer_, BUFFER_LEN); }
+
+void EPaper154Gray4::start_wait_(const char *what, uint32_t timeout_ms) {
+  this->refresh_what_ = what;
   this->refresh_start_ = millis();
-  this->refresh_timeout_ = gray ? TIMEOUT_GRAY_MS : TIMEOUT_PARTIAL_MS;
+  this->refresh_timeout_ = timeout_ms;
   this->refreshing_ = true;
   this->enable_loop();
-  ESP_LOGD(TAG, "%s refresh started", gray ? "Gray" : "Partial");
+  ESP_LOGD(TAG, "%s refresh started", what);
 }
 
 // Waits for BUSY without blocking: the refresh itself runs while ESPHome keeps looping.
@@ -133,18 +151,25 @@ void EPaper154Gray4::loop() {
     ESP_LOGE(TAG, "Timeout waiting for the refresh to finish (%" PRIu32 " ms)", elapsed);
     this->status_set_warning();
   } else {
-    ESP_LOGD(TAG, "%s refresh took %" PRIu32 " ms", this->refresh_gray_ ? "Gray" : "Partial", elapsed);
+    ESP_LOGD(TAG, "%s refresh took %" PRIu32 " ms", this->refresh_what_, elapsed);
     this->status_clear_warning();
   }
-  this->cmd_data_(0x10, {0x01});  // deep sleep, as waveshare_epaper does after every update
-  this->refreshing_ = false;
-  this->disable_loop();
   if (this->repeat_) {
     this->repeat_ = false;
     ESP_LOGD(TAG, "Cleanup pass %u/%u", this->cleanup_done_ + 1, this->cleanup_passes_);
     this->start_partial_();
     return;
   }
+  if (this->pulse_next_) {
+    this->pulse_next_ = false;
+    this->send_pulse_();
+    this->finish_partial_();
+    this->start_wait_("Gray pulse", TIMEOUT_PARTIAL_MS);
+    return;
+  }
+  this->cmd_data_(0x10, {0x01});  // deep sleep, as waveshare_epaper does after every update
+  this->refreshing_ = false;
+  this->disable_loop();
   if (this->pending_) {
     this->pending_ = false;
     this->update();
@@ -175,16 +200,16 @@ void EPaper154Gray4::send_gray_() {
   this->set_ram_area_();
   this->cmd_data_(0x32, LUT_4GRAY, LUT_4GRAY_SEND);
   // GxEPD2 clears both RAMs here; skipped, both planes are fully written right after.
-  this->write_plane_(0x26, 1, false);  // R RAM   = level bit 1
-  this->write_plane_(0x24, 0, false);  // B/W RAM = level bit 0
+  this->write_plane_(0x26, 1);  // R RAM   = level bit 1
+  this->write_plane_(0x24, 0);  // B/W RAM = level bit 0
   this->cmd_data_(0x22, {0xC7});
   this->command_(0x20);  // master activation
 }
 
 // Black/white partial update, register sequence of waveshare_epaper WaveshareEPaperTypeA for 1.54inv2.
 // Differences: the 30 byte SSD1608 LUT is not written (0x22 = 0xFF has the "load LUT" bit set, so the
-// OTP waveform replaces it anyway), and 0x26 gets the previously shown frame (see old_byte()), so the
-// differential waveform compares against the real old image.
+// OTP waveform replaces it anyway), and 0x26 gets the previously shown frame (see partial_bytes()), so
+// the differential waveform compares against the real old image.
 void EPaper154Gray4::send_partial_() {
   this->reset_();
   this->wait_idle_(TIMEOUT_SHORT_MS);
@@ -196,11 +221,22 @@ void EPaper154Gray4::send_partial_() {
   this->cmd_data_(0x11, {0x03});              // data entry: x+, y+
   this->wait_idle_(TIMEOUT_SHORT_MS);
   this->set_ram_area_();
-  this->write_old_();
-  this->write_plane_(0x24, 1, true);  // level >= 2 (>50 %) -> black; B/W RAM 1 = white
+  this->write_partial_plane_(0x26, &PartialBytes::old_plane);
+  this->write_partial_plane_(0x24, &PartialBytes::new_plane);
   this->cmd_data_(0x22, {0xFF});
   this->command_(0x20);  // master activation
   this->command_(0xFF);  // terminate frame read write (as waveshare_epaper)
+}
+
+// Step 2 of a partial update, right after step 1 (no reset in between): only pixels that become gray are
+// driven, with lut_pulse. 0x22 = 0xC7 as for the gray refresh: Display Mode 1 with the register LUT.
+void EPaper154Gray4::send_pulse_() {
+  this->set_ram_area_();
+  this->cmd_data_(0x32, lut_pulse, sizeof(lut_pulse));
+  this->write_partial_plane_(0x26, &PartialBytes::pulse_r);   // R RAM   = LUT index bit 1
+  this->write_partial_plane_(0x24, &PartialBytes::pulse_bw);  // B/W RAM = LUT index bit 0
+  this->cmd_data_(0x22, {0xC7});
+  this->command_(0x20);  // master activation
 }
 
 void EPaper154Gray4::set_ram_area_() {
@@ -211,7 +247,7 @@ void EPaper154Gray4::set_ram_area_() {
   this->cmd_data_(0x4F, {0x00, 0x00});
 }
 
-void EPaper154Gray4::write_plane_(uint8_t cmd, uint8_t bit, bool invert) {
+void EPaper154Gray4::write_plane_(uint8_t cmd, uint8_t bit) {
   this->cmd_data_(0x4E, {0x00});  // start each plane at the window origin
   this->cmd_data_(0x4F, {0x00, 0x00});
   this->command_(cmd);
@@ -220,26 +256,24 @@ void EPaper154Gray4::write_plane_(uint8_t cmd, uint8_t bit, bool invert) {
   this->enable();
   for (size_t y = 0; y < HEIGHT; y++) {
     const uint8_t *src = this->buffer_ + y * (WIDTH / 4);
-    for (size_t i = 0; i < sizeof(row); i++) {
-      const uint8_t b = plane_byte(src + 2 * i, bit);
-      row[i] = invert ? (uint8_t) ~b : b;
-    }
+    for (size_t i = 0; i < sizeof(row); i++)
+      row[i] = plane_byte(src + 2 * i, bit);
     this->write_array(row, sizeof(row));
   }
   this->disable();
 }
 
-void EPaper154Gray4::write_old_() {
+void EPaper154Gray4::write_partial_plane_(uint8_t cmd, uint8_t PartialBytes::*field) {
   this->cmd_data_(0x4E, {0x00});
   this->cmd_data_(0x4F, {0x00, 0x00});
-  this->command_(0x26);
+  this->command_(cmd);
   uint8_t row[WIDTH / 8];
   this->dc_pin_->digital_write(true);
   this->enable();
   for (size_t y = 0; y < HEIGHT; y++) {
     const size_t off = y * (WIDTH / 4);
     for (size_t i = 0; i < sizeof(row); i++)
-      row[i] = old_byte(this->shown_ + off + 2 * i, this->buffer_ + off + 2 * i);
+      row[i] = partial_bytes(this->shown_ + off + 2 * i, this->buffer_ + off + 2 * i).*field;
     this->write_array(row, sizeof(row));
   }
   this->disable();

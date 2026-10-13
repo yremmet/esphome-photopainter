@@ -5,8 +5,9 @@ Good Display GDEH0154D67 / GDEY0154D67) with **4 gray levels**: white, light gra
 Built for the Waveshare ESP32-S3-ePaper-1.54 board, ESP-IDF framework.
 
 - **Full update** = 4-gray refresh with a custom LUT (from GxEPD2_4G, see below)
-- **Partial update** = black/white refresh with the panel's OTP waveform (the same one `waveshare_epaper`
-  `1.54inv2` uses), gray levels > 50 % turn black
+- **Partial update** = no full-panel flash, in two steps: a black/white refresh with the panel's OTP
+  waveform (the same one `waveshare_epaper` `1.54inv2` uses) for the pixels that change, then a short
+  gray pulse only for pixels that become gray (see *Gray partial* below)
 - 2-bit framebuffer (10 kB, PSRAM if available) plus a 10 kB copy of what the panel shows
 - The refresh does not block: `update()` sends the image (~0.1 s) and returns, BUSY is polled in `loop()`,
   then the panel goes into deep sleep, like `waveshare_epaper` does
@@ -76,11 +77,14 @@ bright = black, `Color(170,170,170)` = dark gray, `Color(85,85,85)` = light gray
 
 ## Limitations
 
-- Partial updates are black/white only. The first partial update after a gray refresh removes all gray
-  levels on the panel until the next full update (same as ESPHome's `seeed-reterminal-sticky-gray4`).
-  For that update every formerly gray pixel is reported to the differential waveform as the opposite of
-  its new colour, so it is driven fully to black or white instead of being left as a gray ghost.
-  `cleanup_passes: 2` (or more) repeats that partial refresh for less ghosting, ~0.3 s per pass.
+- Gray partial (experimental): step 2 uses only group 2 of the 4-gray LUT (white -> light gray 3 frames,
+  -> dark gray 8 frames), without the white-reset of groups 0-1 that makes the full refresh flash. The
+  grays start from the white of a B/W partial instead of that reset, so they can come out slightly
+  different from a full refresh and drift over many updates; a full update (`full_update_every`,
+  `full_update_next`) resets them.
+- A pixel that is gray and changes is reported to the differential waveform as the opposite of its new
+  colour, so it is driven fully to black/white instead of being left as a ghost. `cleanup_passes: 2` (or
+  more) repeats that step for less ghosting, ~0.3 s per pass.
 - The 4 gray levels depend on the panel and on temperature (the LUT has no temperature compensation).
   Expect some ghosting from gray refreshes; a B/W partial refresh also does not clean up gray areas.
 - Refresh time: partial ~0.3 s, 4-gray noticeably longer than the old B/W full refresh (~2 s) – measure it,

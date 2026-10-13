@@ -283,7 +283,7 @@ script:
       - delay: 100ms
       - micro_wake_word.start:
 
-  # Kurze Animation aus Partial Refreshes: 10 Frames, ~4 s, danach Ruhebild in Graustufen
+  # Kurze Animation aus Partial Refreshes: 10 Frames, ~4 s
   - id: anim_burst
     mode: restart
     then:
@@ -299,16 +299,11 @@ script:
                 then:
                   - lambda: 'id(anim_frame) += 1;'
                   - component.update: my_display
+                  - wait_until: # jeden Frame fertig zeigen, wie mit dem alten (blockierenden) Treiber
+                      condition:
+                        lambda: 'return !id(my_display).is_refreshing();'
+                      timeout: 3s
             - delay: 400ms
-      - if:
-          condition:
-            and:
-              - display.is_displaying_page: pg_clock
-              - not:
-                  voice_assistant.is_running:
-          then:
-            - epaper_154_gray4.full_update_next: my_display
-            - component.update: my_display
 
 # ---------- Display ----------
 external_components:
@@ -328,7 +323,7 @@ display:
     update_interval: never
     reset_duration: 2ms
     full_update_every: 120 # Partial-Refresh; höher wegen der Animationsframes auf pg_clock
-    cleanup_passes: 2 # nach Graustufen: ehemals graue Pixel 2x aktiv auf S/W treiben (gegen Ghosting)
+    cleanup_passes: 1 # >1: grau -> anders mehrfach treiben (weniger Ghosting, langsamere Animation)
     rotation: 90
     id: my_display
     pages:
@@ -340,9 +335,6 @@ display:
     # Aufbau: Kopfzeile | große Temperatur | Luftfeuchte mit Komfortskala | Terrasse + Wasser
     - id: pg_main
       lambda: |-
-        // Graustufen gibt es nur beim Gray-Refresh -> diese Seite immer voll refreshen
-        // (Partial bleibt für die Uhr-Animation).
-        id(my_display).full_update_next();
         // Farben sind "Tinte": je heller die Farbe, desto dunkler auf dem Panel
         const Color DARK(170, 170, 170);   // dunkelgrau
         const Color LIGHT(85, 85, 85);     // hellgrau
@@ -444,8 +436,6 @@ display:
         it.line(100, 114, 100, 130);
 
         // ---------- Meer: zwei überlagerte Sinuswellen ----------
-        // Graustufen sieht man nur im Ruhebild (Gray-Refresh am Ende von anim_burst);
-        // in den Partial-Frames wird hellgrau weiß und dunkelgrau schwarz.
         const Color DARK(170, 170, 170);   // Tinte: 170 = dunkelgrau
         const Color LIGHT(85, 85, 85);     //         85 = hellgrau
         float ph = id(anim_frame) * 0.55f;
