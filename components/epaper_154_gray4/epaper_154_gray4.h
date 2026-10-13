@@ -79,6 +79,9 @@ class EPaper154Gray4 : public display::DisplayBuffer,
 
   /// Make the next update a 4-gray full refresh.
   void full_update_next() { this->at_update_ = 0; }
+  /// Draw the next partial update in black/white only (gray > 50 % = black): skips the gray pulse,
+  /// for faster animation frames.
+  void bw_only_next() { this->bw_only_next_ = true; }
   /// True while the panel is still refreshing (update() already returned).
   bool is_refreshing() const { return this->refreshing_; }
 
@@ -127,6 +130,7 @@ class EPaper154Gray4 : public display::DisplayBuffer,
   uint8_t *shown_{nullptr};  // what the panel shows, 2 bit per pixel: "old" data for partial updates
   bool repeat_{false};       // run step 1 of the partial update again (cleanup pass)
   bool pulse_next_{false};   // step 2 (gray pulse) follows
+  bool bw_only_next_{false};
   uint32_t refresh_start_{0};
   uint32_t refresh_timeout_{0};
   const char *refresh_what_{""};

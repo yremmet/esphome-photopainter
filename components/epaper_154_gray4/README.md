@@ -63,6 +63,8 @@ Make the next update a 4-gray full refresh, e.g. after a series of partial updat
 ```
 
 `id(my_display).is_refreshing()` is true while the panel is still busy after `update()` returned.
+`id(my_display).bw_only_next()` makes the next partial update black/white only (no gray pulse, about
+half the time), e.g. for fast animation frames.
 
 ## Colours
 

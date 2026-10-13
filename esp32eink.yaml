@@ -285,7 +285,8 @@ script:
 
   # Wellen-Animation auf der Uhr-Seite (Partial Refreshes):
   # am Netz dauerhaft, im Akkubetrieb 10 Frames (gestartet alle 3 min, siehe time.on_time).
-  # Die ersten 30 s so schnell das Panel kann (~1-1,5 fps), danach 1 Frame alle 2 s.
+  # Die ersten 30 s so schnell das Panel kann, nur Schwarzweiß (~1,5 fps),
+  # danach 1 Frame alle 2 s mit Graustufen.
   - id: anim_burst
     mode: restart
     then:
@@ -306,6 +307,8 @@ script:
                 id(anim_frame) += 1;
                 id(anim_left) -= 1;
                 id(anim_frame_start) = millis();
+                if (millis() - id(anim_start) < 30000)
+                  id(my_display).bw_only_next();  // schnelle Phase: ohne Grau-Puls
             - component.update: my_display
             - wait_until: # jeden Frame fertig zeigen, bevor der nächste kommt
                 condition:
@@ -328,6 +331,7 @@ external_components:
 display:
   - platform: epaper_154_gray4 # 200x200 pixels, 4 gray levels
     cs_pin: GPIO11
+    data_rate: 10MHz # wie GxEPD2 für dieses Panel; Bildübertragung ~40 ms statt ~140 ms
     dc_pin: GPIO10
     busy_pin: GPIO8
     reset_pin: GPIO9

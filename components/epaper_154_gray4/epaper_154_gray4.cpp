@@ -98,6 +98,16 @@ void EPaper154Gray4::update() {
   const bool gray = this->at_update_ == 0;
   this->at_update_ = (this->at_update_ + 1) % this->full_update_every_;
 
+  if (this->bw_only_next_ && !gray) {
+    for (size_t i = 0; i < BUFFER_LEN; i++) {  // every level to white (0) or black (3)
+      uint8_t b = this->buffer_[i], out = 0;
+      for (int shift = 6; shift >= 0; shift -= 2)
+        out |= (((b >> shift) & 2) ? 3 : 0) << shift;
+      this->buffer_[i] = out;
+    }
+  }
+  this->bw_only_next_ = false;
+
   if (gray) {
     this->send_gray_();
     memcpy(this->shown_, this->buffer_, BUFFER_LEN);
