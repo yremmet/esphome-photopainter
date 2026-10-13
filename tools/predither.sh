@@ -14,6 +14,7 @@
 # Examples:
 #   tools/predither.sh ~/Bilder/Hochzeit -o ~/Bilder/epaper
 #   tools/predither.sh foto.jpg -o out -- -p dynamic --dither-algorithm floyd-steinberg
+#   tools/predither.sh foto.jpg -o out -- --scale-mode cover   # crop to fill instead of borders
 #
 # Then upload the .bmp AND the .bmp.cfg into the gallery folder (http://photopainter.local/file/...).
 
@@ -57,11 +58,12 @@ convert_one() {
   dims="$(dimensions "$src")"
   read -r w h <<<"${dims:-1 0}"
   # exact panel size, so the device copies pixels 1:1; portrait stays portrait and the
-  # device rotates it like any other portrait photo (hence --skip-rotation)
+  # device rotates it like any other portrait photo. fit = white borders like the gallery's
+  # default (pass `-- --scale-mode cover` to crop instead; later options win)
   if [ "$h" -gt "$w" ]; then size=480x800; else size=800x480; fi
   out="$outdir/$name.bmp"
   echo "→ $src ($size)"
-  epaper-image-convert "$src" "$out" -f bmp --skip-rotation -d "$size" "${extra[@]}"
+  epaper-image-convert "$src" "$out" -f bmp -d "$size" --scale-mode fit "${extra[@]}" >/dev/null
   cat >"$out.cfg" <<'EOF'
 palette=waveshare
 dither=none
