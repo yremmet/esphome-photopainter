@@ -1,0 +1,69 @@
+# Minimal example: Waveshare ESP32-S3-ePaper-1.54 with 4 gray levels.
+esphome:
+  name: epaper-gray4
+  on_boot:
+    then:
+      - output.turn_on: epd_power_enable
+      - component.update: epd
+
+esp32:
+  board: esp32-s3-devkitc-1
+  variant: ESP32S3
+  flash_size: 8MB
+  framework:
+    type: esp-idf
+
+psram:
+  mode: octal
+  speed: 80MHz
+
+logger:
+
+external_components:
+  - source:
+      type: local
+      path: ..   # the repo's components/ folder
+    components: [epaper_154_gray4]
+
+output:
+  - platform: gpio
+    pin: GPIO6 # EPD3V3_EN, panel supply
+    id: epd_power_enable
+    inverted: true
+
+spi:
+  clk_pin: GPIO12
+  mosi_pin: GPIO13
+
+font:
+  - file: { type: gfonts, family: Roboto, weight: 700 }
+    id: f_aa
+    size: 28
+    bpp: 2 # anti-aliased: edge pixels land on the two gray levels
+    glyphs: "Gray4"
+
+image:
+  - platform: file
+    file: gray_gradient.png
+    id: img_gradient
+    type: GRAYSCALE
+    invert_alpha: true # ink convention: bright = black, so store the image inverted
+
+display:
+  - platform: epaper_154_gray4
+    id: epd
+    cs_pin: GPIO11
+    dc_pin: GPIO10
+    busy_pin: GPIO8
+    reset_pin: GPIO9
+    reset_duration: 2ms
+    rotation: 90
+    update_interval: never
+    full_update_every: 1
+    lambda: |-
+      // 0 = white .. 3 = black; COLOR_ON/COLOR_OFF still mean black/white
+      const Color levels[4] = {COLOR_OFF, Color(85, 85, 85), Color(170, 170, 170), COLOR_ON};
+      for (int i = 0; i < 4; i++)
+        it.filled_rectangle(i * 50, 0, 50, 70, levels[i]);
+      it.print(100, 100, id(f_aa), TextAlign::CENTER, "Gray4");
+      it.image(52, 140, id(img_gradient));
