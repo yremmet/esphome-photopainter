@@ -27,6 +27,21 @@ inline uint8_t plane_byte(const uint8_t *src, uint8_t bit) {
   return out;
 }
 
+/// "Old" plane byte for a partial update (8 pixels, 1 = white) from what the panel shows (`shown`) and the
+/// new frame (`now`), both 2 bit per pixel. White/black pixels report their real old colour; a gray pixel
+/// reports the opposite of its new colour, so the differential waveform drives it all the way (otherwise
+/// light gray counts as "already white" and stays as a ghost).
+inline uint8_t old_byte(const uint8_t *shown, const uint8_t *now) {
+  uint8_t out = 0;
+  for (int b = 0; b < 2; b++)
+    for (int shift = 6; shift >= 0; shift -= 2) {
+      const uint8_t s = (shown[b] >> shift) & 3;
+      const uint8_t white_now = ((now[b] >> shift) & 2) == 0;
+      out = (uint8_t) ((out << 1) | (s == 0 ? 1 : s == 3 ? 0 : !white_now));
+    }
+  return out;
+}
+
 /// Waveshare 1.54" V2 / Good Display GDEH0154D67 (SSD1681, 200x200) with 4 gray levels.
 /// Full update = 4-gray refresh with a custom LUT, partial update = black/white (OTP waveform).
 class EPaper154Gray4 : public display::DisplayBuffer,
@@ -38,6 +53,7 @@ class EPaper154Gray4 : public display::DisplayBuffer,
   void set_busy_pin(GPIOPin *pin) { this->busy_pin_ = pin; }
   void set_reset_duration(uint32_t ms) { this->reset_duration_ = ms; }
   void set_full_update_every(uint32_t n) { this->full_update_every_ = n; }
+  void set_cleanup_passes(uint8_t n) { this->cleanup_passes_ = n; }
 
   /// Make the next update a 4-gray full refresh.
   void full_update_next() { this->at_update_ = 0; }
@@ -58,7 +74,6 @@ class EPaper154Gray4 : public display::DisplayBuffer,
   static constexpr int WIDTH = 200;
   static constexpr int HEIGHT = 200;
   static constexpr size_t BUFFER_LEN = WIDTH * HEIGHT / 4;  // 2 bit per pixel
-  static constexpr size_t PLANE_LEN = WIDTH * HEIGHT / 8;   // 1 bit per pixel
 
   int get_width_internal() override { return WIDTH; }
   int get_height_internal() override { return HEIGHT; }
@@ -71,9 +86,11 @@ class EPaper154Gray4 : public display::DisplayBuffer,
   void reset_();
   void set_ram_area_();
   void write_plane_(uint8_t cmd, uint8_t bit, bool invert);
-  void write_prev_();
+  void write_old_();
   void send_gray_();
   void send_partial_();
+  void start_partial_();
+  void start_wait_(bool gray);
 
   GPIOPin *dc_pin_{nullptr};
   GPIOPin *reset_pin_{nullptr};
@@ -81,7 +98,11 @@ class EPaper154Gray4 : public display::DisplayBuffer,
   uint32_t reset_duration_{200};
   uint32_t full_update_every_{1};
   uint32_t at_update_{0};
-  uint8_t *prev_{nullptr};  // last shown frame as B/W plane (1 = white), "old" data for partial updates
+  uint8_t cleanup_passes_{1};
+  uint8_t cleanup_done_{0};
+  uint8_t *shown_{nullptr};  // what the panel shows, 2 bit per pixel: "old" data for partial updates
+  bool shown_gray_{false};   // shown_ still has gray pixels
+  bool repeat_{false};       // run the same partial update again (cleanup pass)
   uint32_t refresh_start_{0};
   uint32_t refresh_timeout_{0};
   bool refresh_gray_{false};

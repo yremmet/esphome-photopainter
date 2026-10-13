@@ -1,22 +1,49 @@
 # This YAML describes a Waveshare ESP32S3-ePaper-1.54 development board
 # Author: GHF - Dec-2025
-# Erweitert um: ES8311 Audio (Media Player), Mikrofon, Wake Word, Voice Assistant
+# Erweitert um: ES8311 Audio (Media Player), Mikrofon, Wake Word, Voice Assistant,
+#               Deep Sleep im Akkubetrieb,
+#               Sprachdialog-Anzeige auf dem ePaper (hört zu / verstanden / Antwort)
+#
+# Standort: Küche. Temperatur/Luftfeuchte vom Aqara-Sensor Küche (HA); fällt der aus,
+# springt der SHTC3 auf dem Board ein (Anzeige "Board"). Dazu Terrassentür und
+# Wassermelder (Zigbee) aus Home Assistant.
 #
 # Power control:
 #   - if dev is off (blank screen and green LED off): Press Power button and hold for more than 3 secs
 #   - if dev is on (green LED is on): Press Power button once and dev will turn off completely
+#   - im Deep Sleep weckt ein Druck auf den Power-Button das Gerät
 #
-# HINWEIS: Deep Sleep ist auskommentiert (unten), weil Dauerzuhören und Deep Sleep
-# sich ausschließen. Für den Voice-Betrieb das Board an USB betreiben.
+# Deep Sleep: Nur im Akkubetrieb (Erkennung über Akkuspannung). Dann wacht das
+# Gerät alle 15 min auf, aktualisiert das Display und schläft nach ~60 s wieder.
+# Am USB bleibt es dauerhaft wach (Wake Word aktiv).
+# Für OTA im Akkubetrieb: in einer Wachphase "Deep Sleep sperren" einschalten.
 #
 esphome:
   name: esp32eink
   friendly_name: esp32eink
   on_boot:
-    then:
-      - output.turn_on: vbat_power_enable # "connect" battery
-      - output.turn_on: epd_power_enable # turn ePaper display on
-      - light.turn_on: green_led
+    - priority: 600
+      then:
+        - output.turn_on: vbat_power_enable # "connect" battery
+        - output.turn_on: epd_power_enable # turn ePaper display on
+        - light.turn_on: green_led
+        - pcf85063.read_time: # Zeit aus der RTC holen, bevor HA verbunden ist
+            id: rtc_time
+    # Neue Firmware erkennen: Config-Hash mit dem zuletzt gespeicherten vergleichen
+    - priority: -100
+      then:
+        - lambda: |-
+            uint32_t h = App.get_config_hash();
+            if (h != id(last_config_hash)) {
+              id(fw_updated) = true;
+              id(last_config_hash) = h;
+            }
+        - if:
+            condition:
+              lambda: 'return id(fw_updated);'
+            then:
+              - display.page.show: pg_updated
+              - component.update: my_display
   on_shutdown:
     then:
       - lambda: |- # GHF: This is required for the battery to keep connected during deep_sleep
@@ -42,18 +69,33 @@ api:
   encryption:
     key: !secret esp32eink__encryption_key
   on_client_connected:
+    - if:
+        condition:
+          lambda: 'return id(fw_updated);'
+        then:
+          - delay: 30s # Update-Meldung eine Weile stehen lassen
+          - globals.set:
+              id: fw_updated
+              value: 'false'
     - display.page.show: pg_main
     - delay: 5s
     - component.update: my_display
 
 ota:
   - platform: esphome
-    password: !secret esp32eink__ota_password
+    encryption: # nutzt den API-Key, passend zur installierten Zwischen-Firmware
+    allow_partition_access: true # für das Partitionstabellen-Update per OTA
+    on_begin:
+      - display.page.show: pg_ota
+      - component.update: my_display
+    on_error:
+      - display.page.show: pg_ota_error
+      - component.update: my_display
 
 wifi:
   ssid: SH
   password: !secret wifi_password
-  power_save_mode: HIGH
+  power_save_mode: HIGH # mit BLE-Tracker kompatibel (NONE wäre es nicht)
 
   ap:
     ssid: "Esp32Eink Fallback Hotspot"
@@ -132,6 +174,15 @@ speaker:
     sample_rate: 16000
     bits_per_sample: 16bit
 
+  # Mixer: Ansagen und Medien bekommen je einen eigenen Source-Speaker,
+  # beide werden auf den einen I2S-Ausgang gemischt.
+  - platform: mixer
+    id: spk_mixer # nicht "mixer_speaker" – kollidiert mit dem C++-Namespace
+    output_speaker: i2s_audio_speaker
+    source_speakers:
+      - id: announcement_spk
+      - id: media_spk
+
 microphone:
   - platform: i2s_audio
     id: va_mic
@@ -150,12 +201,12 @@ media_player:
     volume_min: 0.5
     volume_max: 0.85
     announcement_pipeline:
-      speaker: i2s_audio_speaker
+      speaker: announcement_spk
       format: FLAC
       sample_rate: 16000
       num_channels: 1
     media_pipeline:
-      speaker: i2s_audio_speaker
+      speaker: media_spk
       format: FLAC
       sample_rate: 16000
       num_channels: 1
@@ -196,6 +247,28 @@ voice_assistant:
     - micro_wake_word.stop:
   on_error:
     - micro_wake_word.start:
+    - display.page.show: !lambda 'return id(va_prev_clock) ? id(pg_clock) : id(pg_main);'
+    - component.update: my_display
+  # ---- Sprachdialog auf dem Display ----
+  # Refreshes blockieren ~300 ms, deshalb nur dort, wo gerade kein Audio gestreamt wird.
+  on_listening:
+    - lambda: |-
+        id(va_prev_clock) = id(my_display).get_active_page() == id(pg_clock);
+        id(va_stt_text).clear();
+        id(va_tts_text).clear();
+    - display.page.show: pg_listening
+    - component.update: my_display
+  on_stt_end:
+    - lambda: 'id(va_stt_text) = x;'
+    - display.page.show: pg_dialog
+    - component.update: my_display
+  on_tts_start:
+    - lambda: 'id(va_tts_text) = x;'
+    - component.update: my_display
+  on_end:
+    - delay: 8s # Antwort lesbar stehen lassen
+    - display.page.show: !lambda 'return id(va_prev_clock) ? id(pg_clock) : id(pg_main);'
+    - component.update: my_display
 
 script:
   - id: restart_mww
@@ -210,12 +283,41 @@ script:
       - delay: 100ms
       - micro_wake_word.start:
 
+  # Kurze Animation aus Partial Refreshes: 10 Frames, ~4 s, danach Ruhebild in Graustufen
+  - id: anim_burst
+    mode: restart
+    then:
+      - repeat:
+          count: 10
+          then:
+            - if:
+                condition:
+                  and:
+                    - display.is_displaying_page: pg_clock
+                    - not:
+                        voice_assistant.is_running:
+                then:
+                  - lambda: 'id(anim_frame) += 1;'
+                  - component.update: my_display
+            - delay: 400ms
+      - if:
+          condition:
+            and:
+              - display.is_displaying_page: pg_clock
+              - not:
+                  voice_assistant.is_running:
+          then:
+            - epaper_154_gray4.full_update_next: my_display
+            - component.update: my_display
+
 # ---------- Display ----------
 external_components:
   - source:
-      type: local
-      path: components
+      type: git
+      url: https://github.com/yremmet/esphome-photopainter
+      ref: main
     components: [epaper_154_gray4]
+    refresh: 1h
 
 display:
   - platform: epaper_154_gray4 # 200x200 pixels, 4 gray levels
@@ -225,7 +327,8 @@ display:
     reset_pin: GPIO9
     update_interval: never
     reset_duration: 2ms
-    full_update_every: 1
+    full_update_every: 120 # Partial-Refresh; höher wegen der Animationsframes auf pg_clock
+    cleanup_passes: 2 # nach Graustufen: ehemals graue Pixel 2x aktiv auf S/W treiben (gegen Ghosting)
     rotation: 90
     id: my_display
     pages:
@@ -233,87 +336,219 @@ display:
       lambda: |-
         it.print(100, 100, id(f_24b), TextAlign::CENTER, "Starte...");
 
+    # ---------- Hauptseite: Küche ----------
+    # Aufbau: Kopfzeile | große Temperatur | Luftfeuchte mit Komfortskala | Terrasse + Wasser
     - id: pg_main
       lambda: |-
-        // ---------- Kopfzeile ----------
-        it.filled_rectangle(0, 0, 200, 26, COLOR_ON);
-        it.print(6, 13, id(f_16b), COLOR_OFF, TextAlign::CENTER_LEFT, "Wohnzimmer");
+        // Graustufen gibt es nur beim Gray-Refresh -> diese Seite immer voll refreshen
+        // (Partial bleibt für die Uhr-Animation).
+        id(my_display).full_update_next();
+        // Farben sind "Tinte": je heller die Farbe, desto dunkler auf dem Panel
+        const Color DARK(170, 170, 170);   // dunkelgrau
+        const Color LIGHT(85, 85, 85);     // hellgrau
+
+        // ---------- Kopfzeile (dunkelgrau) ----------
+        it.filled_rectangle(0, 0, 200, 26, DARK);
+        it.print(6, 13, id(f_16b), COLOR_OFF, TextAlign::CENTER_LEFT, "Küche");
         auto now = id(time_comp).now();
         if (now.is_valid())
           it.strftime(194, 13, id(f_16b), COLOR_OFF, TextAlign::CENTER_RIGHT, "%H:%M", now);
 
-        // Batterie-Symbol (3.4 V = leer, 4.2 V = voll)
-        float vb = id(batt_voltage).state;
-        float frac = isnan(vb) ? 0.0f : fminf(fmaxf((vb - 3.4f) / 0.8f, 0.0f), 1.0f);
-        it.rectangle(118, 8, 20, 11, COLOR_OFF);
-        it.filled_rectangle(138, 11, 2, 5, COLOR_OFF);
-        int bw = (int) (frac * 16);
-        if (bw > 0) it.filled_rectangle(120, 10, bw, 7, COLOR_OFF);
-
-        // ---------- Ist-Temperatur ----------
-        float t = id(wz_temp).state;
-        it.print(4, 66, id(f_icon_32), TextAlign::CENTER_LEFT, "\U000F050F");
-        if (isnan(t))
-          it.print(112, 64, id(f_48), TextAlign::CENTER, "--.-");
-        else
-          it.printf(112, 64, id(f_48), TextAlign::CENTER, "%.1f°", t);
-
-        // ---------- Zieltemperatur (invertiert, wenn geheizt wird) ----------
-        float z = id(wz_target).state;
-        bool heating = id(wz_action).state == "heating";
-        char buf[32];
-        if (isnan(z))
-          snprintf(buf, sizeof(buf), "Ziel --.-°");
-        else if (heating)
-          snprintf(buf, sizeof(buf), "Heizt auf %.1f°", z);
-        else
-          snprintf(buf, sizeof(buf), "Ziel %.1f°", z);
-
-        if (heating) {
-          it.filled_rectangle(30, 96, 140, 22, COLOR_ON);
-          it.print(100, 107, id(f_16), COLOR_OFF, TextAlign::CENTER, buf);
-        } else {
-          it.rectangle(30, 96, 140, 22, COLOR_ON);
-          it.print(100, 107, id(f_16), COLOR_ON, TextAlign::CENTER, buf);
+        // Batterie-Symbol nur im Akkubetrieb (3.4 V = leer, 4.2 V = voll)
+        if (!id(on_usb).state) {
+          float vb = id(batt_voltage).state;
+          float frac = isnan(vb) ? 0.0f : fminf(fmaxf((vb - 3.4f) / 0.8f, 0.0f), 1.0f);
+          it.rectangle(110, 8, 20, 11, COLOR_OFF);
+          it.filled_rectangle(130, 11, 2, 5, COLOR_OFF);
+          int bw = (int) (frac * 16);
+          if (bw > 0) it.filled_rectangle(112, 10, bw, 7, COLOR_OFF);
         }
 
-        // ---------- Luftqualität: zwei Kacheln ----------
-        it.line(0, 126, 199, 126);
-        it.line(100, 126, 100, 199);
+        // ---------- Temperatur: Aqara, sonst Boardsensor ----------
+        bool fallback = isnan(id(kueche_temp).state);
+        float t = fallback ? id(local_temp).state     : id(kueche_temp).state;
+        float h = fallback ? id(local_humidity).state : id(kueche_hum).state;
+        it.print(10, 54, id(f_icon_32), DARK, TextAlign::CENTER_LEFT, "\U000F050F");
+        if (isnan(t))
+          it.print(118, 54, id(f_48), TextAlign::CENTER, "--.-");
+        else
+          it.printf(118, 54, id(f_48), TextAlign::CENTER, "%.1f°", t);
+        if (fallback)  // Hinweis, dass der (zu warme) Boardsensor angezeigt wird
+          it.print(190, 76, id(f_12), DARK, TextAlign::CENTER_RIGHT, "Board");
 
-        auto tile = [&](int x0, const char *icon, const char *label, float val,
-                        float ok_below, float warn_below) {
+        // ---------- Luftfeuchte ----------
+        it.print(12, 92, id(f_icon_20), DARK, TextAlign::CENTER_LEFT, "\U000F058E");
+        if (isnan(h))
+          it.print(38, 92, id(f_24b), TextAlign::CENTER_LEFT, "-- %");
+        else
+          it.printf(38, 92, id(f_24b), TextAlign::CENTER_LEFT, "%.0f %%", h);
+        const char *hl = isnan(h) ? "" : (h < 40 ? "trocken" : (h <= 60 ? "angenehm" : "feucht"));
+        it.print(190, 93, id(f_12), DARK, TextAlign::CENTER_RIGHT, hl);
+
+        // Komfortskala 0..100 % (x 20..180): Skala hellgrau, Wohlfühlbereich 40-60 %
+        // dunkelgrau, aktueller Wert als schwarzer Marker oben und unten
+        it.filled_rectangle(20, 112, 161, 7, LIGHT);
+        it.filled_rectangle(84, 112, 33, 7, DARK);
+        if (!isnan(h)) {
+          int mx = 20 + (int) roundf(fminf(fmaxf(h, 0.0f), 100.0f) * 1.6f);
+          it.filled_triangle(mx, 112, mx - 4, 106, mx + 4, 106, COLOR_ON);
+          it.filled_triangle(mx, 118, mx - 4, 124, mx + 4, 124, COLOR_ON);
+        }
+
+        // ---------- Zwei Kacheln: Terrassentür + Wassermelder ----------
+        it.line(0, 130, 199, 130, DARK);
+        it.line(100, 130, 100, 199, DARK);
+
+        auto tile = [&](int x0, const char *icon, const char *label,
+                        bool alarm, const char *ok_text, const char *alarm_text) {
           int cx = x0 + 50;
-          it.print(x0 + 8, 139, id(f_icon_20), TextAlign::CENTER_LEFT, icon);
-          it.print(x0 + 32, 139, id(f_12), TextAlign::CENTER_LEFT, label);
-          if (isnan(val)) {
-            it.print(cx, 160, id(f_24b), TextAlign::CENTER, "--");
-            return;
-          }
-          it.printf(cx, 160, id(f_24b), TextAlign::CENTER, "%.0f", val);
-          if (val >= warn_below) {          // schlecht -> schwarzes Badge
-            it.filled_rectangle(x0 + 15, 177, 70, 18, COLOR_ON);
-            it.print(cx, 186, id(f_12), COLOR_OFF, TextAlign::CENTER, "Lüften!");
-          } else if (val >= ok_below) {     // mäßig -> umrandet
-            it.rectangle(x0 + 15, 177, 70, 18, COLOR_ON);
-            it.print(cx, 186, id(f_12), TextAlign::CENTER, "mäßig");
-          } else {                          // gut -> nur Text
-            it.print(cx, 186, id(f_12), TextAlign::CENTER, "gut");
+          it.print(cx, 148, id(f_icon_20), alarm ? COLOR_ON : DARK, TextAlign::CENTER, icon);
+          it.print(cx, 168, id(f_12), DARK, TextAlign::CENTER, label);
+          if (alarm) {                      // Alarm -> schwarzes Badge
+            it.filled_rectangle(x0 + 15, 180, 70, 16, COLOR_ON);
+            it.print(cx, 188, id(f_12), COLOR_OFF, TextAlign::CENTER, alarm_text);
+          } else {                          // ok -> nur Text
+            it.print(cx, 188, id(f_12), TextAlign::CENTER, ok_text);
           }
         };
 
-        // Schwellen: CO2 800/1200 ppm, VOC 250/2000 ppb (Airthings-Empfehlung)
-        tile(0,   "\U000F07E4", "CO2 ppm", id(wz_co2).state, 800, 1200);
-        tile(101, "\U000F0D43", "VOC ppb", id(wz_voc).state, 250, 2000);
+        bool door_open = id(door_terrasse).state;
+        bool leak      = id(leak_kueche).state;
+        tile(0,   door_open ? "\U000F081C" : "\U000F081B", "Terrasse", door_open, "zu", "offen");
+        tile(101, leak      ? "\U000F0026" : "\U000F058C", "Wasser",   leak,      "ok", "LECK!");
+
+    # ---------- Uhr mit animiertem Meer (Button 0 wechselt die Seite) ----------
+    - id: pg_clock
+      lambda: |-
+        static const char *wd[] = {"", "Sonntag", "Montag", "Dienstag", "Mittwoch",
+                                   "Donnerstag", "Freitag", "Samstag"};
+        static const char *mo[] = {"", "Jan", "Feb", "März", "Apr", "Mai", "Juni",
+                                   "Juli", "Aug", "Sep", "Okt", "Nov", "Dez"};
+        auto now = id(time_comp).now();
+
+        // ---------- Datum + Uhrzeit ----------
+        if (now.is_valid()) {
+          it.printf(100, 20, id(f_16), TextAlign::CENTER, "%s, %d. %s",
+                    wd[now.day_of_week], now.day_of_month, mo[now.month]);
+          it.strftime(100, 76, id(f_clock), TextAlign::CENTER, "%H:%M", now);
+        } else {
+          it.print(100, 76, id(f_clock), TextAlign::CENTER, "--:--");
+        }
+
+        // ---------- Raumwerte ----------
+        bool fallback = isnan(id(kueche_temp).state);
+        float t = fallback ? id(local_temp).state     : id(kueche_temp).state;
+        float h = fallback ? id(local_humidity).state : id(kueche_hum).state;
+        if (!isnan(t)) it.printf(50, 122, id(f_16b), TextAlign::CENTER, "%.1f°", t);
+        if (!isnan(h)) it.printf(150, 122, id(f_16b), TextAlign::CENTER, "%.0f %%", h);
+        it.line(100, 114, 100, 130);
+
+        // ---------- Meer: zwei überlagerte Sinuswellen ----------
+        // Graustufen sieht man nur im Ruhebild (Gray-Refresh am Ende von anim_burst);
+        // in den Partial-Frames wird hellgrau weiß und dunkelgrau schwarz.
+        const Color DARK(170, 170, 170);   // Tinte: 170 = dunkelgrau
+        const Color LIGHT(85, 85, 85);     //         85 = hellgrau
+        float ph = id(anim_frame) * 0.55f;
+        auto wave = [&](int x) -> int {
+          return 166 + (int) roundf(4.0f * sinf(x * 0.055f + ph)
+                                  + 2.0f * sinf(x * 0.13f - ph * 1.4f));
+        };
+        for (int x = 0; x < 200; x++) {
+          int y = wave(x);
+          it.draw_pixel_at(x, y, LIGHT);       // Schaumkrone
+          it.line(x, y + 1, x, y + 7, DARK);   // Oberflächenwasser
+          it.line(x, y + 8, x, 199);           // Tiefe
+        }
+
+        // Lichtreflexe im Wasser, die in Gegenrichtung ziehen
+        int f = id(anim_frame);
+        for (int k = 0; k < 6; k++) {
+          int x1 = ((k * 37 + f * 4) % 200 + 200) % 200;
+          int x2 = ((k * 41 + 17 - f * 3) % 200 + 200) % 200;
+          it.line(x1, 180, x1 + 5, 180, LIGHT);
+          it.line(x2, 191, x2 + 4, 191, LIGHT);
+        }
+
+        // ---------- Boot, das auf der Welle schaukelt ----------
+        int bx = 138;
+        int yl = wave(bx - 12), yr = wave(bx + 12);
+        int by = (yl + yr) / 2;
+        int dx = (yr - yl) * 1.2f;  // Neigung des Masts
+        // Rumpf (weiß gefüllt, schwarze Oberkante)
+        it.filled_triangle(bx - 15, yl - 5, bx + 15, yr - 5, bx + 10, yr + 3, COLOR_OFF);
+        it.filled_triangle(bx - 15, yl - 5, bx + 10, yr + 3, bx - 10, yl + 3, COLOR_OFF);
+        it.line(bx - 15, yl - 5, bx + 15, yr - 5);
+        // Mast (2 px) und Segel
+        it.line(bx, by - 5, bx + dx, by - 33);
+        it.line(bx + 1, by - 5, bx + 1 + dx, by - 33);
+        it.filled_triangle(bx + 2 + dx, by - 31,
+                           bx + 2 + dx / 6, by - 9,
+                           bx + 18 + dx / 6, by - 9);
 
     - id: pg_off
       lambda: |-
         it.filled_rectangle(0, 0, 200, 200, COLOR_OFF);
 
+    - id: pg_ota
+      lambda: |-
+        it.print(100, 85, id(f_24b), TextAlign::CENTER, "Update");
+        it.print(100, 115, id(f_24b), TextAlign::CENTER, "läuft...");
+
+    - id: pg_ota_error
+      lambda: |-
+        it.print(100, 85, id(f_24b), TextAlign::CENTER, "Update");
+        it.print(100, 115, id(f_24b), TextAlign::CENTER, "fehlgeschlagen");
+
+    - id: pg_updated
+      lambda: |-
+        it.filled_rectangle(0, 0, 200, 26, COLOR_ON);
+        it.print(100, 13, id(f_16b), COLOR_OFF, TextAlign::CENTER, "Firmware");
+        it.print(100, 70, id(f_24b), TextAlign::CENTER, "Update");
+        it.print(100, 100, id(f_24b), TextAlign::CENTER, "installiert");
+        char bt[Application::BUILD_TIME_STR_SIZE];
+        App.get_build_time_string(bt);
+        it.print(100, 150, id(f_12), TextAlign::CENTER, bt);
+        it.printf(100, 175, id(f_12), TextAlign::CENTER, "ESPHome %s", ESPHOME_VERSION);
+
     - id: pg_low_batt
       lambda: |-
         it.print(100, 85, id(f_24b), TextAlign::CENTER, "Akku");
         it.print(100, 115, id(f_24b), TextAlign::CENTER, "zu schwach");
+
+    # ---------- Sprachassistent ----------
+    - id: pg_listening
+      lambda: |-
+        it.filled_rectangle(0, 0, 200, 200, COLOR_ON);
+        it.print(100, 70, id(f_icon_32), COLOR_OFF, TextAlign::CENTER, "\U000F036C");
+        it.print(100, 120, id(f_24b), COLOR_OFF, TextAlign::CENTER, "Ich höre zu");
+
+    - id: pg_dialog
+      lambda: |-
+        // einfacher Zeilenumbruch: ~24 Zeichen/Zeile bei f_12, ~15 bei f_16
+        auto wrap = [&](const std::string &s, int y, int max_chars, int line_h, int max_lines, display::BaseFont *fnt) {
+          std::string line, word;
+          int lines = 0;
+          for (size_t i = 0; i <= s.size() && lines < max_lines; i++) {
+            if (i == s.size() || s[i] == ' ') {
+              if ((int) (line.size() + word.size()) > max_chars && !line.empty()) {
+                it.print(100, y, fnt, TextAlign::TOP_CENTER, line.c_str());
+                y += line_h; lines++; line.clear();
+              }
+              line += (line.empty() ? "" : " ") + word;
+              word.clear();
+            } else word += s[i];
+          }
+          if (!line.empty() && lines < max_lines)
+            it.print(100, y, fnt, TextAlign::TOP_CENTER, line.c_str());
+        };
+        it.filled_rectangle(0, 0, 200, 26, COLOR_ON);
+        it.print(100, 13, id(f_16b), COLOR_OFF, TextAlign::CENTER, "Assistent");
+        wrap(id(va_stt_text), 34, 24, 14, 3, id(f_12));
+        it.line(20, 82, 180, 82);
+        if (id(va_tts_text).empty())
+          it.print(100, 130, id(f_16), TextAlign::CENTER, "...");
+        else
+          wrap(id(va_tts_text), 90, 15, 20, 5, id(f_16));
 
 font:
   - file:
@@ -337,8 +572,13 @@ font:
 
   - file: { type: gfonts, family: Roboto, weight: 700 }
     id: f_48
+    bpp: 2 # antialiased (Graustufen)
     size: 48
     glyphs: "0123456789.-°"
+  - file: { type: gfonts, family: Roboto, weight: 700 }
+    id: f_clock
+    size: 60
+    glyphs: "0123456789:-"
   - file: { type: gfonts, family: Roboto, weight: 700 }
     id: f_24b
     size: 24
@@ -360,17 +600,23 @@ font:
       type: web
       url: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
     id: f_icon_32
+    bpp: 2 # antialiased (Graustufen)
     size: 32
     glyphs:
       - "\U000F050F" # mdi:thermometer
+      - "\U000F036C" # mdi:microphone
   - file:
       type: web
       url: "https://github.com/Templarian/MaterialDesign-Webfont/raw/master/fonts/materialdesignicons-webfont.ttf"
     id: f_icon_20
+    bpp: 2 # antialiased (Graustufen)
     size: 20
     glyphs:
-      - "\U000F07E4" # mdi:molecule-co2
-      - "\U000F0D43" # mdi:air-filter
+      - "\U000F058E" # mdi:water-percent
+      - "\U000F081C" # mdi:door-open
+      - "\U000F081B" # mdi:door-closed
+      - "\U000F058C" # mdi:water
+      - "\U000F0026" # mdi:alert
 
 binary_sensor:
   - platform: status
@@ -386,6 +632,16 @@ binary_sensor:
         pullup: true
     name: "Button 0"
     id: button_0
+    on_press: # wechselt zwischen Küchen-Seite und Uhr
+      - if:
+          condition:
+            display.is_displaying_page: pg_clock
+          then:
+            - display.page.show: pg_main
+            - component.update: my_display
+          else:
+            - display.page.show: pg_clock
+            - script.execute: anim_burst
 
   - platform: gpio # Power button, to poweroff board when on battery
     pin:
@@ -394,31 +650,112 @@ binary_sensor:
         input: true
         pullup: true
       inverted: True
+      allow_other_uses: true # auch Wakeup-Pin für Deep Sleep
     id: button_pwr
     on_press: # internally disconnects the battery
       then:
-        - display.page.show: pg_off
-        - component.update: my_display
-        - lambda: |- # GHF: This is required for the next output.turn_off to work
-            gpio_hold_dis(GPIO_NUM_17);
-        - output.turn_off: vbat_power_enable
-       # the rest of this code runs only if USB power is connected
-        - display.page.show: pg_main
-        - component.update: my_display
-        - output.turn_on: vbat_power_enable
+        - if:
+            condition: # den Druck, der aus dem Deep Sleep weckt, ignorieren
+              lambda: 'return millis() > 5000;'
+            then:
+              - display.page.show: pg_off
+              - component.update: my_display
+              - wait_until: # update() blockiert nicht mehr: Refresh fertig laufen lassen
+                  condition:
+                    lambda: 'return !id(my_display).is_refreshing();'
+                  timeout: 10s
+              - lambda: |- # GHF: This is required for the next output.turn_off to work
+                  gpio_hold_dis(GPIO_NUM_17);
+              - output.turn_off: vbat_power_enable
+             # the rest of this code runs only if USB power is connected
+              - display.page.show: pg_main
+              - component.update: my_display
+              - output.turn_on: vbat_power_enable
+
+  # Netzbetrieb-Erkennung über die Akkuspannung (am Ladegerät ~4.2 V)
+  - platform: template
+    id: on_usb
+    name: "Netzbetrieb"
+    lambda: 'return id(batt_voltage).state > 4.15;'
+    filters:
+      - delayed_off: 60s # kurze Spannungseinbrüche ignorieren
+
+  # --- aus Home Assistant: Küche ---
+  - platform: homeassistant
+    id: door_terrasse
+    entity_id: binary_sensor.terrassentur_offnung
+    internal: true
+    on_state: # Tür auf/zu sofort anzeigen
+      - if:
+          condition:
+            display.is_displaying_page: pg_main
+          then:
+            - component.update: my_display
+  - platform: homeassistant
+    id: leak_kueche
+    entity_id: binary_sensor.lumi_lumi_sensor_wleak_aq1
+    internal: true
+    on_state:
+      - if:
+          condition:
+            display.is_displaying_page: pg_main
+          then:
+            - component.update: my_display
 
 time:
+  - platform: pcf85063
+    id: rtc_time
+    address: 0x51
+    timezone: "Europe/Berlin"
+    update_interval: never
+
   - platform: homeassistant
     id: time_comp
     timezone: "Europe/Berlin"
+    on_time_sync:
+      then:
+        - pcf85063.write_time: # korrekte Zeit in die RTC schreiben
+            id: rtc_time
+        - component.update: my_display
+    on_time:
+      - seconds: 0 # jede volle Minute Display aktualisieren
+        then:
+          - if:
+              condition:
+                display.is_displaying_page: pg_clock
+              then:
+                - script.execute: anim_burst # Wellen-Animation, aktualisiert auch die Uhr
+              else:
+                - component.update: my_display
 
 sensor:
-  # --- lokal am Board ---
+  # --- aus Home Assistant: Aqara-Sensor Küche (primäre Quelle) ---
+  # Ist der Sensor unavailable, liefert ESPHome NaN -> Anzeige fällt auf den Boardsensor zurück.
+  - platform: homeassistant
+    id: kueche_temp
+    entity_id: sensor.lumi_lumi_weather_temperature
+    internal: true
+    on_value:
+      - if:
+          condition:
+            display.is_displaying_page: pg_main
+          then:
+            - component.update: my_display
+  - platform: homeassistant
+    id: kueche_hum
+    entity_id: sensor.lumi_lumi_weather_humidity
+    internal: true
+
+  # --- lokal am Board (nur Fallback) ---
+  # Der SHTC3 wird vom ESP32 bei 240 MHz + Wake Word um ~10 K aufgeheizt,
+  # deshalb nur Notlösung. Offset ggf. mit Referenzthermometer abgleichen.
   - platform: shtcx
     update_interval: 10s
     temperature:
       name: "Temperature"
       id: local_temp
+      filters:
+        - offset: 0.0
     humidity:
       name: "Humidity"
       id: local_humidity
@@ -436,35 +773,40 @@ sensor:
         then:
           - display.page.show: pg_low_batt
           - component.update: my_display
+          - wait_until: # update() blockiert nicht mehr: Refresh fertig laufen lassen
+              condition:
+                lambda: 'return !id(my_display).is_refreshing();'
+              timeout: 10s
           - lambda: |-
               gpio_hold_dis(GPIO_NUM_17);
           - output.turn_off: vbat_power_enable
 
-  # --- aus Home Assistant: Wohnzimmer ---
-  - platform: homeassistant
-    id: wz_temp
-    entity_id: sensor.airthings_wave_037753_temperatur
-    internal: true
-  - platform: homeassistant
-    id: wz_target
-    entity_id: climate.wohnzimmer
-    attribute: temperature
-    internal: true
-  - platform: homeassistant
-    id: wz_co2
-    entity_id: sensor.airthings_wave_037753_kohlendioxid
-    internal: true
-  - platform: homeassistant
-    id: wz_voc
-    entity_id: sensor.airthings_wave_037753_voc_teile
-    internal: true
+globals:
+  - id: last_config_hash # überlebt Neustarts, erkennt neue Firmware
+    type: uint32_t
+    restore_value: true
+    initial_value: '0'
+  - id: fw_updated
+    type: bool
+    initial_value: 'false'
+  - id: anim_frame # aktueller Frame der Wellen-Animation
+    type: int
+    initial_value: '0'
+  - id: ds_disabled # überlebt Schlafzyklen, damit OTA im Akkubetrieb möglich ist
+    type: bool
+    restore_value: true
+    initial_value: 'false'
 
-text_sensor:
-  - platform: homeassistant
-    id: wz_action
-    entity_id: climate.wohnzimmer
-    attribute: hvac_action
-    internal: true
+  # --- Sprachdialog-Anzeige ---
+  - id: va_prev_clock # merkt sich, ob vor dem Sprachdialog die Uhr lief
+    type: bool
+    initial_value: 'false'
+  - id: va_stt_text # erkannter Satz
+    type: std::string
+    initial_value: '""'
+  - id: va_tts_text # Antwort des Assistenten
+    type: std::string
+    initial_value: '""'
 
 button:
   - platform: template # to force a display update from HomeAssistant
@@ -473,42 +815,55 @@ button:
       then:
         - component.update: my_display
 
-# Wenn Wake Word oder Audio stottern: als Erstes den BLE-Proxy auskommentieren.
+# ---------- Bluetooth: Proxy ----------
+# Wenn Wake Word oder Audio stottern: als Erstes den BLE-Proxy auskommentieren,
+# als Zweites interval auf 320ms hoch / window auf 30ms runter setzen.
 esp32_ble_tracker:
+  scan_parameters:
+    interval: 150ms
+    window: 150ms
+    active: true
+    continuous: true
+
 bluetooth_proxy:
   active: true
 
-# ---------- Deep Sleep (deaktiviert, verträgt sich nicht mit Dauerzuhören) ----------
-# Zum Reaktivieren: Blöcke einkommentieren und bei GPIO18 (button_pwr)
-# wieder "allow_other_uses: True" unter pin: ergänzen.
-#
-# globals:
-#   - id: ds_disabled
-#     initial_value: 'false'
-#     type: bool
-#
-# switch:
-#   - platform: template
-#     name: "Deep sleep disabled"
-#     lambda: |-
-#       return id(ds_disabled);
-#     turn_on_action:
-#       - deep_sleep.prevent: ds1
-#       - globals.set:
-#           id: ds_disabled
-#           value: 'true'
-#     turn_off_action:
-#       - deep_sleep.allow: ds1
-#       - globals.set:
-#           id: ds_disabled
-#           value: 'false'
-#     restore_mode: ALWAYS_OFF
-#
-# deep_sleep:
-#   id: ds1
-#   sleep_duration: 30min
-#   run_duration: 30s
-#   wakeup_pin:
-#     number: GPIO18
-#     inverted: True
-#     allow_other_uses: True
+# ---------- Deep Sleep (nur im Akkubetrieb) ----------
+deep_sleep:
+  id: ds1
+  sleep_duration: 15min
+  wakeup_pin:
+    number: GPIO18
+    inverted: true
+    allow_other_uses: true
+
+switch:
+  - platform: template
+    name: "Deep Sleep sperren"
+    lambda: 'return id(ds_disabled);'
+    turn_on_action:
+      - globals.set:
+          id: ds_disabled
+          value: 'true'
+    turn_off_action:
+      - globals.set:
+          id: ds_disabled
+          value: 'false'
+
+interval:
+  - interval: 15s
+    then:
+      - if:
+          condition:
+            and:
+              - lambda: |-
+                  return !id(ds_disabled) && !id(fw_updated)
+                         && !isnan(id(batt_voltage).state)
+                         && millis() > 60000;   // mind. 60 s wach
+              - binary_sensor.is_off: on_usb
+              - not:
+                  voice_assistant.is_running:
+          then:
+            - logger.log: "Akkubetrieb – Deep Sleep für 15 min"
+            - micro_wake_word.stop:
+            - deep_sleep.enter: ds1

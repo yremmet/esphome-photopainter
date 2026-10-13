@@ -7,7 +7,7 @@ Built for the Waveshare ESP32-S3-ePaper-1.54 board, ESP-IDF framework.
 - **Full update** = 4-gray refresh with a custom LUT (from GxEPD2_4G, see below)
 - **Partial update** = black/white refresh with the panel's OTP waveform (the same one `waveshare_epaper`
   `1.54inv2` uses), gray levels > 50 % turn black
-- 2-bit framebuffer (10 kB, PSRAM if available) plus a 5 kB copy of the last shown B/W frame
+- 2-bit framebuffer (10 kB, PSRAM if available) plus a 10 kB copy of what the panel shows
 - The refresh does not block: `update()` sends the image (~0.1 s) and returns, BUSY is polled in `loop()`,
   then the panel goes into deep sleep, like `waveshare_epaper` does
 
@@ -49,6 +49,7 @@ A complete minimal config is in [`example.yaml`](example.yaml).
 | `reset_pin` | – | required (wakes the panel from deep sleep) |
 | `reset_duration` | `200ms` | reset pulse, max 500 ms |
 | `full_update_every` | `1` | every Nth update is a 4-gray refresh, the rest are B/W partial. `1` = always gray |
+| `cleanup_passes` | `1` | partial refreshes of the first frame after a gray refresh, 1..5 (see below) |
 | `rotation`, `pages`, `lambda`, `update_interval`, `auto_clear_enabled`, `data_rate` | | as for every ESPHome SPI display |
 
 ### Action: `epaper_154_gray4.full_update_next`
@@ -77,6 +78,9 @@ bright = black, `Color(170,170,170)` = dark gray, `Color(85,85,85)` = light gray
 
 - Partial updates are black/white only. The first partial update after a gray refresh removes all gray
   levels on the panel until the next full update (same as ESPHome's `seeed-reterminal-sticky-gray4`).
+  For that update every formerly gray pixel is reported to the differential waveform as the opposite of
+  its new colour, so it is driven fully to black or white instead of being left as a gray ghost.
+  `cleanup_passes: 2` (or more) repeats that partial refresh for less ghosting, ~0.3 s per pass.
 - The 4 gray levels depend on the panel and on temperature (the LUT has no temperature compensation).
   Expect some ghosting from gray refreshes; a B/W partial refresh also does not clean up gray areas.
 - Refresh time: partial ~0.3 s, 4-gray noticeably longer than the old B/W full refresh (~2 s) – measure it,

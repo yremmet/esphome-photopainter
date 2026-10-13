@@ -17,6 +17,8 @@ from . import EPaper154Gray4
 
 DEPENDENCIES = ["spi"]
 
+CONF_CLEANUP_PASSES = "cleanup_passes"
+
 # Same options as waveshare_epaper. reset_pin and busy_pin are required here: the panel
 # deep-sleeps between updates (needs reset to wake up) and the refresh is awaited via BUSY.
 CONFIG_SCHEMA = cv.All(
@@ -29,6 +31,7 @@ CONFIG_SCHEMA = cv.All(
             cv.Optional(CONF_FULL_UPDATE_EVERY, default=1): cv.int_range(
                 min=1, max=4294967295
             ),
+            cv.Optional(CONF_CLEANUP_PASSES, default=1): cv.int_range(min=1, max=5),
             cv.Optional(CONF_RESET_DURATION): cv.All(
                 cv.positive_time_period_milliseconds,
                 cv.Range(max=core.TimePeriod(milliseconds=500)),
@@ -54,6 +57,7 @@ async def to_code(config):
     cg.add(var.set_reset_pin(await cg.gpio_pin_expression(config[CONF_RESET_PIN])))
     cg.add(var.set_busy_pin(await cg.gpio_pin_expression(config[CONF_BUSY_PIN])))
     cg.add(var.set_full_update_every(config[CONF_FULL_UPDATE_EVERY]))
+    cg.add(var.set_cleanup_passes(config[CONF_CLEANUP_PASSES]))
     if CONF_RESET_DURATION in config:
         cg.add(var.set_reset_duration(config[CONF_RESET_DURATION]))
     if CONF_LAMBDA in config:
