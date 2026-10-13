@@ -147,7 +147,10 @@ class EPaperGallery : public Component {
   std::string palette_preset_{"config"};
   bool ready_{false};          // setup() done: setting changes trigger a re-render
   uint32_t rerender_at_{0};    // debounced re-render deadline (millis), 0 = none
-  bool keep_settings_{false};  // pending render is a re-render: don't load a settings file
+  bool keep_settings_{false};
+  bool update_pending_{false};      // image presented, display update() not issued yet
+  bool display_seen_idle_{false};   // display goes idle between updates (epaper_spi does)
+  bool waiting_logged_{false};  // pending render is a re-render: don't load a settings file
   bool auto_rotate_{true};
   ColorSpace color_space_{CS_LAB};
   // Colours used for the "which palette entry is closest" decision (order: black white

@@ -142,8 +142,11 @@ void EPaperGallery::settings_changed_() {
 }
 
 bool EPaperGallery::rerender() {
-  if (this->current_file_.empty())
+  if (this->current_file_.empty()) {
+    ESP_LOGW(TAG, "Nothing to re-render: no image shown yet");
     return false;
+  }
+  ESP_LOGI(TAG, "Re-rendering %s", this->current_file_.c_str());
   this->pending_ = this->current_file_;
   this->keep_settings_ = true;
   return true;
@@ -329,13 +332,33 @@ void EPaperGallery::loop() {
     this->free_buffers_();
   }
 
-  // 2) a setting changed a moment ago -> re-render the current image with it
+  // 2) push a finished image. epaper_spi drops update() calls ("Display already in state
+  //    ...") while the previous refresh (~30 s on Spectra) is still running, so wait for it.
+  //    Its loop is disabled exactly when it is idle; displays that never go idle don't wait.
+  if (this->display_->is_idle())
+    this->display_seen_idle_ = true;
+  if (this->update_pending_) {
+    if (this->display_seen_idle_ && !this->display_->is_idle()) {
+      if (!this->waiting_logged_) {
+        ESP_LOGI(TAG, "Image ready, waiting for the running display refresh to finish");
+        this->waiting_logged_ = true;
+      }
+    } else {
+      this->update_pending_ = false;
+      this->waiting_logged_ = false;
+      if (this->page_ != nullptr)
+        this->page_->show();
+      this->display_->update();  // runs the display lambda / page, which calls draw()
+    }
+  }
+
+  // 3) a setting changed a moment ago -> re-render the current image with it
   if (this->rerender_at_ != 0 && (int32_t) (millis() - this->rerender_at_) >= 0) {
     this->rerender_at_ = 0;
     this->rerender();
   }
 
-  // 3) start the next render if one is pending and nothing is running
+  // 4) start the next render if one is pending and nothing is running
   if (this->pending_.empty() || this->task_running_.load())
     return;
 
@@ -513,9 +536,7 @@ void EPaperGallery::present_(uint8_t *idx, int w, int h) {
   this->shown_idx_ = idx;
   this->shown_w_ = w;
   this->shown_h_ = h;
-  if (this->page_ != nullptr)
-    this->page_->show();
-  this->display_->update();  // runs the display lambda / page, which calls draw()
+  this->update_pending_ = true;  // update() itself happens in loop() once the display is idle
 }
 
 void EPaperGallery::draw(display::Display &it) {
