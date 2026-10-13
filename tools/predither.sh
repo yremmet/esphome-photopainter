@@ -40,7 +40,6 @@ command -v epaper-image-convert >/dev/null || {
   echo "epaper-image-convert not found: npm install -g @aitjcize/epaper-image-convert" >&2
   exit 1
 }
-mkdir -p "$outdir"
 
 # prints "W H" as the photo is displayed (EXIF orientation applied when ImageMagick is there)
 dimensions() {
@@ -61,6 +60,7 @@ convert_one() {
   # device rotates it like any other portrait photo. fit = white borders like the gallery's
   # default (pass `-- --scale-mode cover` to crop instead; later options win)
   if [ "$h" -gt "$w" ]; then size=480x800; else size=800x480; fi
+  mkdir -p "$outdir"
   out="$outdir/$name.bmp"
   echo "→ $src ($size)"
   epaper-image-convert "$src" "$out" -f bmp -d "$size" --scale-mode fit "${extra[@]}" >/dev/null
