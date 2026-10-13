@@ -88,9 +88,11 @@ external_components:
     refresh: 1h
 
 logger:
-  level: INFO
+  level: DEBUG
   logs:
-    epaper_gallery: DEBUG
+    esp32_ble_tracker: INFO   # the BLE proxy floods the log otherwise
+    bluetooth_proxy: INFO
+    sensor: INFO
 
 api:
   encryption:
@@ -356,6 +358,7 @@ button:
       sorting_group_id: gallery_group
       sorting_weight: 22
     on_press:
+      - lambda: id(gallery).rerender();
   - platform: template
     name: Refresh image list
     web_server:
