@@ -283,26 +283,30 @@ script:
       - delay: 100ms
       - micro_wake_word.start:
 
-  # Kurze Animation aus Partial Refreshes: 10 Frames, ~4 s
+  # Wellen-Animation auf der Uhr-Seite (Partial Refreshes):
+  # am Netz dauerhaft, im Akkubetrieb 10 Frames (gestartet alle 3 min, siehe time.on_time)
   - id: anim_burst
     mode: restart
     then:
-      - repeat:
-          count: 10
+      - lambda: 'id(anim_left) = 10;'
+      - while:
+          condition:
+            and:
+              - display.is_displaying_page: pg_clock
+              - not:
+                  voice_assistant.is_running:
+              - or:
+                  - binary_sensor.is_on: on_usb
+                  - lambda: 'return id(anim_left) > 0;'
           then:
-            - if:
+            - lambda: |-
+                id(anim_frame) += 1;
+                id(anim_left) -= 1;
+            - component.update: my_display
+            - wait_until: # jeden Frame fertig zeigen, bevor der nächste kommt
                 condition:
-                  and:
-                    - display.is_displaying_page: pg_clock
-                    - not:
-                        voice_assistant.is_running:
-                then:
-                  - lambda: 'id(anim_frame) += 1;'
-                  - component.update: my_display
-                  - wait_until: # jeden Frame fertig zeigen, wie mit dem alten (blockierenden) Treiber
-                      condition:
-                        lambda: 'return !id(my_display).is_refreshing();'
-                      timeout: 3s
+                  lambda: 'return !id(my_display).is_refreshing();'
+                timeout: 3s
             - delay: 400ms
 
 # ---------- Display ----------
@@ -669,6 +673,15 @@ binary_sensor:
     lambda: 'return id(batt_voltage).state > 4.15;'
     filters:
       - delayed_off: 60s # kurze Spannungseinbrüche ignorieren
+    on_press: # Netzteil angesteckt: Animation auf der Uhr-Seite dauerhaft laufen lassen
+      - if:
+          condition:
+            and:
+              - display.is_displaying_page: pg_clock
+              - not:
+                  script.is_running: anim_burst
+          then:
+            - script.execute: anim_burst
 
   # --- aus Home Assistant: Küche ---
   - platform: homeassistant
@@ -714,7 +727,20 @@ time:
               condition:
                 display.is_displaying_page: pg_clock
               then:
-                - script.execute: anim_burst # Wellen-Animation, aktualisiert auch die Uhr
+                - if: # läuft die Animation schon (Netzbetrieb), aktualisiert sie die Uhr selbst
+                    condition:
+                      not:
+                        script.is_running: anim_burst
+                    then:
+                      - if:
+                          condition: # am Netz dauerhaft, im Akkubetrieb alle 3 Minuten
+                            or:
+                              - binary_sensor.is_on: on_usb
+                              - lambda: 'return id(time_comp).now().minute % 3 == 0;'
+                          then:
+                            - script.execute: anim_burst
+                          else:
+                            - component.update: my_display
               else:
                 - component.update: my_display
 
@@ -780,6 +806,9 @@ globals:
     type: bool
     initial_value: 'false'
   - id: anim_frame # aktueller Frame der Wellen-Animation
+    type: int
+    initial_value: '0'
+  - id: anim_left # restliche Frames im Akkubetrieb
     type: int
     initial_value: '0'
   - id: ds_disabled # überlebt Schlafzyklen, damit OTA im Akkubetrieb möglich ist
