@@ -3,7 +3,7 @@
 # device shows 1:1: a panel-sized BMP in pure palette colours plus a "<file>.bmp.cfg"
 # that tells epaper_gallery not to touch it again (palette waveshare, no dithering).
 #
-# Requires: epaper-image-convert (npm install -g epaper-image-convert)
+# Requires: epaper-image-convert (npm install -g @aitjcize/epaper-image-convert)
 # Optional: ImageMagick (`magick`) for EXIF-correct portrait/landscape detection,
 #           otherwise macOS `sips` is used (ignores EXIF rotation).
 #
@@ -36,7 +36,7 @@ done
 [ ${#extra[@]} -gt 0 ] || extra=(-p balanced --color-method lab --dither-algorithm stucki)
 
 command -v epaper-image-convert >/dev/null || {
-  echo "epaper-image-convert not found: npm install -g epaper-image-convert" >&2
+  echo "epaper-image-convert not found: npm install -g @aitjcize/epaper-image-convert" >&2
   exit 1
 }
 mkdir -p "$outdir"

@@ -98,7 +98,7 @@ Lambda API: `show("file.jpg")`, `show_next()`, `show_previous()`,
 plus a `<file>.bmp.cfg` (palette `waveshare`, dither `none`), so the device shows them 1:1:
 
 ```bash
-npm install -g epaper-image-convert
+npm install -g @aitjcize/epaper-image-convert
 tools/predither.sh ~/Pictures/wedding -o ~/Pictures/epaper
 tools/predither.sh photo.jpg -o out -- -p dynamic --dither-algorithm floyd-steinberg
 ```
